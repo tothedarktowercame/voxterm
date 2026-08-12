@@ -1,0 +1,571 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#12141a">
+<title>voxterm</title>
+<style>
+  :root {
+    --bg: #12141a; --panel: #1a1d26; --line: #2a2f3d;
+    --fg: #e6e8ee; --dim: #8a91a3; --accent: #5b9dff;
+    --live: #ff4d5e; --ok: #46d17f; --rocket: #ffb020;
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  body {
+    margin: 0; background: var(--bg); color: var(--fg);
+    font: 15px/1.5 ui-sans-serif, system-ui, -apple-system, sans-serif;
+    padding: env(safe-area-inset-top) 0 env(safe-area-inset-bottom);
+    overscroll-behavior: none;
+  }
+  header { padding: 14px 16px 4px; }
+  h1 { margin: 0; font-size: 17px; letter-spacing: .02em; }
+  .sub { color: var(--dim); font-size: 12.5px; margin-top: 2px; }
+  main { padding: 8px 16px 28px; max-width: 760px; margin: 0 auto; }
+
+  /* --- mode switch --- */
+  #rocket {
+    width: 100%; padding: 14px; margin: 10px 0 10px;
+    border: 1px solid var(--line); border-radius: 14px;
+    background: var(--panel); color: var(--fg);
+    font: 600 16px/1.3 inherit; cursor: pointer; user-select: none;
+    display: flex; align-items: center; justify-content: center; gap: 10px;
+    transition: background .12s, border-color .12s;
+  }
+  #rocket .em { font-size: 20px; filter: grayscale(1) opacity(.6); transition: filter .12s; }
+  #rocket.on { background: #2b2110; border-color: var(--rocket); color: #ffd489; }
+  #rocket.on .em { filter: none; }
+
+  #talk {
+    width: 100%; height: 150px; margin: 0 0 12px;
+    border: 1px solid var(--line); border-radius: 16px;
+    background: var(--panel); color: var(--fg);
+    font-size: 19px; font-weight: 600;
+    display: flex; align-items: center; justify-content: center; flex-direction: column; gap: 6px;
+    cursor: pointer; user-select: none; touch-action: none;
+    transition: background .1s, border-color .1s, opacity .12s;
+  }
+  #talk small { font-weight: 400; font-size: 13px; color: var(--dim); }
+  #talk.live { background: #2a1418; border-color: var(--live); }
+  #talk.busy { background: #16202e; border-color: var(--accent); }
+  #talk.hidden { display: none; }
+
+  /* --- listening panel --- */
+  #listen { display: none; }
+  #listen.on { display: block; }
+  #meterWrap {
+    position: relative; height: 34px; background: var(--panel);
+    border: 1px solid var(--line); border-radius: 10px; overflow: hidden; margin-bottom: 8px;
+  }
+  #meter { height: 100%; width: 0%; background: #29405e; transition: width .05s linear; }
+  #meterWrap.speech #meter { background: #6b2f38; }
+  #thresh { position: absolute; top: 0; bottom: 0; width: 2px; background: var(--rocket); }
+  #meterLabel {
+    position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+    font: 11.5px ui-monospace, Menlo, monospace; color: var(--dim); letter-spacing: .04em;
+  }
+  #pending {
+    background: #171b24; border: 1px dashed var(--line); border-radius: 10px;
+    padding: 10px 12px; min-height: 44px; margin-bottom: 10px;
+    font: 14px/1.55 ui-monospace, Menlo, monospace; color: #cfd4e0;
+    white-space: pre-wrap; word-break: break-word;
+  }
+  #pending:empty::before { content: 'buffering… say "rocket" to send'; color: var(--dim); font-style: italic; }
+  #pending.flash { border-color: var(--rocket); background: #241d10; }
+
+  .row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; margin-bottom: 12px; }
+  label { font-size: 12.5px; color: var(--dim); display: flex; gap: 6px; align-items: center; }
+  select, input[type=range] {
+    background: var(--panel); color: var(--fg); border: 1px solid var(--line);
+    border-radius: 8px; padding: 7px 9px; font-size: 13px; font-family: inherit;
+  }
+  input[type=range] { padding: 0; width: 108px; accent-color: var(--rocket); }
+
+  #out {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
+    padding: 12px 14px; min-height: 92px; white-space: pre-wrap; word-break: break-word;
+    font: 14.5px/1.6 ui-monospace, Menlo, monospace;
+  }
+  #out:empty::before { content: "dispatched text appears here"; color: var(--dim); }
+
+  .bar { display: flex; gap: 8px; margin: 10px 0 18px; }
+  .bar button {
+    flex: 1; background: var(--panel); color: var(--fg); border: 1px solid var(--line);
+    border-radius: 9px; padding: 10px; font-size: 13px; font-family: inherit; cursor: pointer;
+  }
+  .bar button:active { background: #222736; }
+
+  h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .08em; color: var(--dim);
+       margin: 0 0 8px; font-weight: 600; }
+  #log { display: flex; flex-direction: column; gap: 8px; }
+  .ent { border: 1px solid var(--line); border-radius: 10px; padding: 9px 11px; background: var(--panel); }
+  .ent .t { font: 13.5px/1.5 ui-monospace, Menlo, monospace; }
+  .ent .m { color: var(--dim); font-size: 11.5px; margin-top: 5px; font-family: ui-monospace, Menlo, monospace; }
+  .ent .m b { color: var(--ok); font-weight: 600; }
+  .ent.bad { border-color: #7a2b33; } .ent.bad .t { color: #ff8a94; }
+  .ent.fired { border-color: var(--rocket); } .ent.fired .t { color: #ffd489; }
+  .ent.agent { border-color: #2f5d7a; } .ent.agent .t { color: #a8d0ea; }
+  #status { font-size: 12.5px; color: var(--dim); min-height: 18px; margin-bottom: 4px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>voxterm</h1>
+  <div class="sub">push to talk &rarr; whisper.cpp on the box &rarr; text</div>
+</header>
+
+<main>
+  <div id="status">tap the button once to grant mic access</div>
+
+  <button id="rocket"><span class="em">&#128640;</span><span id="rocketLabel">Always listening — off</span></button>
+
+  <div id="listen">
+    <div id="meterWrap">
+      <div id="meter"></div><div id="thresh"></div><div id="meterLabel">idle</div>
+    </div>
+    <div id="pending"></div>
+  </div>
+
+  <button id="talk">
+    <span id="talkLabel">Hold to talk</span>
+    <small id="talkHint">or hold the space bar</small>
+  </button>
+
+  <div class="row">
+    <label>model
+      <select id="model">
+        <option value="small.en" selected>small.en (fast)</option>
+        <option value="large-v3-turbo">large-v3-turbo (better)</option>
+      </select>
+    </label>
+    <label>audio ctx
+      <select id="ac">
+        <option value="0">full (slow; use with turbo)</option>
+        <option value="512" selected>512</option>
+        <option value="256">256</option>
+        <option value="128">128 (breaks)</option>
+      </select>
+    </label>
+    <label>decode
+      <select id="greedy">
+        <option value="1" selected>greedy</option>
+        <option value="0">beam 5</option>
+      </select>
+    </label>
+    <label>sensitivity <input type="range" id="sens" min="1.5" max="9" step="0.25" value="3.5"></label>
+    <label>route to
+      <select id="sink">
+        <option value="emacs" selected>emacs</option>
+        <option value="tmux">tmux</option>
+        <option value="none">nowhere (demo)</option>
+      </select>
+    </label>
+    <label><input type="checkbox" id="submit" checked> press RET (emacs)</label>
+    <label><input type="checkbox" id="speakagent" checked> speak agent replies</label>
+    <label><input type="checkbox" id="speakback"> echo transcript (debug)</label>
+  </div>
+
+  <div id="out"></div>
+  <div class="bar">
+    <button id="copy">Copy all</button>
+    <button id="clear">Clear</button>
+    <button id="recal">Recalibrate</button>
+  </div>
+
+  <h2>Segments</h2>
+  <div id="log"></div>
+</main>
+
+<script>
+const $ = s => document.querySelector(s);
+const talk = $('#talk'), tLabel = $('#talkLabel'), tHint = $('#talkHint');
+const rocket = $('#rocket'), rLabel = $('#rocketLabel'), listen = $('#listen');
+const meter = $('#meter'), meterWrap = $('#meterWrap'), threshEl = $('#thresh'), meterLabel = $('#meterLabel');
+const pending = $('#pending'), statusEl = $('#status'), out = $('#out'), log = $('#log');
+
+const RATE = 16000;
+const FRAME = 1024;                 // 64 ms at 16 kHz
+const PREROLL_FRAMES = 6;           // ~384 ms kept before speech is detected
+const START_FRAMES = 2;             // ~128 ms above threshold to open a segment
+const HANG_FRAMES = 11;             // ~700 ms below threshold to close it
+const MIN_SEG_SEC = 0.35;
+const MAX_SEG_SEC = 20;
+
+// "rocket" as whisper actually renders it — including the homophone.
+const TRIGGER = /\b(?:rocket+|rock\s?it|rock\s?et|rocked|rockit)\b/gi;
+
+// The keyword means "send", so it lands at the END of an utterance. Requiring that
+// keeps "the rocket ship launched" and "I rocked up late" from firing. One trailing
+// word is tolerated for a stray token.
+function findTrigger(text) {
+  let m, last = null;
+  TRIGGER.lastIndex = 0;
+  while ((m = TRIGGER.exec(text)) !== null) last = m;
+  if (!last) return null;
+  const tail = text.slice(last.index + last[0].length).replace(/^[\s.,!?;:]+/, '').trim();
+  if (tail && tail.split(/\s+/).length > 1) return null;
+  return last;
+}
+// whisper's stock hallucinations on near-silence
+const JUNK = /^(?:thank you\.?|thanks for watching!?|you|bye\.?|\.|,)$/i;
+
+let ctx = null, node = null, inRate = RATE;
+let mode = 'ptt';                   // 'ptt' | 'always'
+let pttRec = false, busy = false;
+let pttChunks = [];
+let ring = [], segFrames = [], vad = 'silence', above = 0, below = 0;
+let noiseFloor = 0.004, threshold = 0.014, lastRms = 0, calibrating = 0, calAcc = [];
+let queue = [], draining = false, wakeLock = null, speaking = false;
+
+// Speak arbitrary text through piper on the box and play it here. The audio is a
+// pure duplicate of the REPL buffer — every failure path degrades to silence.
+async function speakText(text) {
+  if (!ctx || !text || !text.trim() || speaking) return;
+  try {
+    const res = await fetch('/speak', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text: text })
+    });
+    if (!res.ok) { setStatus('speak-back failed (' + res.status + ')'); return; }
+    const synthMs = res.headers.get('X-Synth-Ms');
+    const decoded = await ctx.decodeAudioData(await res.arrayBuffer());
+    speaking = true;
+    if (mode === 'always') meterLabel.textContent = 'speaking…';
+    const src = ctx.createBufferSource();
+    src.buffer = decoded;
+    src.connect(ctx.destination);
+    await new Promise(done => { src.onended = done; src.start(); });
+    if (synthMs) setStatus('spoke back in ' + synthMs + ' ms');
+  } catch (err) {
+    setStatus('speak-back failed: ' + err.message);
+  } finally {
+    // Short tail so room reverb doesn't reopen the gate mid-decay.
+    setTimeout(() => { speaking = false; }, 250);
+  }
+}
+
+function speakBack(text) {
+  if (!$('#speakback').checked) return;
+  return speakText(text);
+}
+
+// Drain the agent-reply queue. Emacs enqueues via POST /say; nothing here blocks
+// the REPL, so a failed poll is simply a quiet turn.
+async function drainSay() {
+  if (!$('#speakagent').checked || speaking || !ctx) return;
+  try {
+    const res = await fetch('/say/next');
+    if (!res.ok) return;
+    const r = await res.json();
+    if (r.text) {
+      addEntry(r.text, 'agent · spoken' + (r.depth ? ' · ' + r.depth + ' queued' : ''), 'agent');
+      await speakText(r.text);
+    }
+  } catch (err) { /* server down or page offline — stay silent */ }
+}
+setInterval(drainSay, 1200);
+
+const setStatus = t => statusEl.textContent = t;
+
+async function initAudio() {
+  if (ctx) return true;
+  try {
+    ctx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: RATE });
+    const stream = await navigator.mediaDevices.getUserMedia({
+      audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true }
+    });
+    inRate = ctx.sampleRate;
+    const src = ctx.createMediaStreamSource(stream);
+    node = ctx.createScriptProcessor(FRAME, 1, 1);
+    node.onaudioprocess = onFrame;
+    const mute = ctx.createGain(); mute.gain.value = 0;
+    src.connect(node); node.connect(mute); mute.connect(ctx.destination);
+    setStatus('ready — mic at ' + inRate + ' Hz');
+    return true;
+  } catch (err) {
+    setStatus('mic unavailable: ' + err.name + ' — ' + err.message);
+    return false;
+  }
+}
+
+function onFrame(e) {
+  const buf = new Float32Array(e.inputBuffer.getChannelData(0));
+  let sum = 0;
+  for (let i = 0; i < buf.length; i++) sum += buf[i] * buf[i];
+  lastRms = Math.sqrt(sum / buf.length);
+
+  if (mode === 'ptt') { if (pttRec) pttChunks.push(buf); return; }
+
+  // The speaker is audible to the mic. Without this gate the listener hears the
+  // acknowledgement, transcribes it, and in rocket mode can dispatch it again.
+  if (speaking) {
+    ring.length = 0; above = 0; below = 0;
+    if (vad === 'speech') { vad = 'silence'; segFrames = []; meterWrap.classList.remove('speech'); }
+    return;
+  }
+
+  // --- always-listening ---
+  if (calibrating > 0) {
+    calAcc.push(lastRms);
+    if (--calibrating === 0) {
+      calAcc.sort((a, b) => a - b);
+      noiseFloor = calAcc[Math.floor(calAcc.length / 2)] || 0.004;
+      applySens();
+      setStatus('calibrated — floor ' + noiseFloor.toFixed(4) + ', threshold ' + threshold.toFixed(4));
+    }
+    return;
+  }
+
+  ring.push(buf); if (ring.length > PREROLL_FRAMES) ring.shift();
+
+  if (vad === 'silence') {
+    above = lastRms > threshold ? above + 1 : 0;
+    if (above >= START_FRAMES) { vad = 'speech'; below = 0; segFrames = ring.slice(); meterWrap.classList.add('speech'); }
+  } else {
+    segFrames.push(buf);
+    below = lastRms > threshold ? 0 : below + 1;
+    const secs = segFrames.length * FRAME / RATE;
+    if (below >= HANG_FRAMES || secs >= MAX_SEG_SEC) closeSegment();
+  }
+}
+
+function closeSegment() {
+  vad = 'silence'; above = 0; below = 0;
+  meterWrap.classList.remove('speech');
+  const frames = segFrames; segFrames = [];
+  const secs = frames.length * FRAME / RATE;
+  if (secs < MIN_SEG_SEC) return;
+  queue.push(flatten(frames));
+  drain();
+}
+
+function applySens() { threshold = Math.max(noiseFloor * parseFloat($('#sens').value), 0.005); }
+
+function flatten(bufs) {
+  let n = 0; for (const b of bufs) n += b.length;
+  const o = new Float32Array(n); let p = 0;
+  for (const b of bufs) { o.set(b, p); p += b.length; }
+  return o;
+}
+
+function resample(data, from, to) {
+  if (from === to) return data;
+  const ratio = from / to, n = Math.floor(data.length / ratio), r = new Float32Array(n);
+  for (let i = 0; i < n; i++) {
+    const p = i * ratio, a = Math.floor(p), b = Math.min(a + 1, data.length - 1);
+    r[i] = data[a] + (data[b] - data[a]) * (p - a);
+  }
+  return r;
+}
+
+function encodeWav(samples, rate) {
+  const buf = new ArrayBuffer(44 + samples.length * 2), v = new DataView(buf);
+  const str = (o, s) => { for (let i = 0; i < s.length; i++) v.setUint8(o + i, s.charCodeAt(i)); };
+  str(0, 'RIFF'); v.setUint32(4, 36 + samples.length * 2, true); str(8, 'WAVE');
+  str(12, 'fmt '); v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 1, true);
+  v.setUint32(24, rate, true); v.setUint32(28, rate * 2, true);
+  v.setUint16(32, 2, true); v.setUint16(34, 16, true);
+  str(36, 'data'); v.setUint32(40, samples.length * 2, true);
+  let o = 44;
+  for (let i = 0; i < samples.length; i++) {
+    const s = Math.max(-1, Math.min(1, samples[i]));
+    v.setInt16(o, s < 0 ? s * 0x8000 : s * 0x7fff, true); o += 2;
+  }
+  return new Blob([buf], { type: 'audio/wav' });
+}
+
+// Segments are sent strictly in order so the buffered text stays coherent.
+async function drain() {
+  if (draining) return;
+  draining = true;
+  while (queue.length) {
+    const samples = resample(queue.shift(), inRate, RATE);
+    await send(samples, true);
+  }
+  draining = false;
+}
+
+async function send(samples, fromVad) {
+  const secs = samples.length / RATE;
+  const t0 = performance.now();
+  if (!fromVad) { busy = true; talk.classList.add('busy'); tLabel.textContent = 'Transcribing…'; }
+  else meterLabel.textContent = 'transcribing ' + secs.toFixed(1) + 's…';
+  try {
+    const qs = new URLSearchParams({ model: $('#model').value, ac: $('#ac').value, greedy: $('#greedy').value });
+    const res = await fetch('/transcribe?' + qs, {
+      method: 'POST', headers: { 'Content-Type': 'audio/wav' }, body: encodeWav(samples, RATE)
+    });
+    const r = await res.json();
+    handle(r, Math.round(performance.now() - t0), fromVad);
+  } catch (err) {
+    addEntry('request failed: ' + err.message, '', 'bad');
+    setStatus('request failed — is server.py still running?');
+  } finally {
+    if (!fromVad) { busy = false; talk.classList.remove('busy'); tLabel.textContent = 'Hold to talk'; tHint.textContent = 'or hold the space bar'; }
+    else meterLabel.textContent = mode === 'always' ? 'listening' : 'idle';
+  }
+}
+
+function handle(r, roundTrip, fromVad) {
+  if (r.error || r.ok === false) {
+    addEntry(r.error || r.stderr || 'whisper failed', '', 'bad');
+    return;
+  }
+  const text = (r.text || '').trim();
+  const meta = [r.audio_sec + 's', '<b>' + r.infer_ms + ' ms</b>', roundTrip + ' ms rt',
+                'rtf ' + r.rtf, r.model, 'ac ' + (r.audio_ctx || 'full')].join(' · ');
+
+  if (!fromVad) {
+    addEntry(text || '(silence)', meta, '');
+    // Push-to-talk routes each utterance straight through; there is no buffer to hold.
+    if (text) dispatch(text);
+    else setStatus('last: ' + r.infer_ms + ' ms — nothing heard');
+    return;
+  }
+
+  if (!text || JUNK.test(text.trim())) { addEntry(text || '(nothing)', meta + ' · dropped', ''); return; }
+
+  const m = findTrigger(text);
+  if (!m) {
+    pending.textContent += (pending.textContent ? ' ' : '') + text;
+    addEntry(text, meta, '');
+    setStatus('buffered — say "rocket" to send');
+    return;
+  }
+
+  // Keyword found: everything before it is the payload, anything after starts the next buffer.
+  const before = text.slice(0, m.index).trim();
+  const after = text.slice(m.index + m[0].length).trim();
+  const payload = (pending.textContent + ' ' + before).trim();
+  addEntry(text, meta + ' · <b>ROCKET</b>', 'fired');
+  pending.textContent = after;
+  if (payload) dispatch(payload); else setStatus('rocket with empty buffer — nothing sent');
+}
+
+async function dispatch(text) {
+  out.textContent += (out.textContent ? '\n' : '') + text;
+  pending.classList.add('flash');
+  setTimeout(() => pending.classList.remove('flash'), 450);
+
+  // Fired, not awaited: the ack and the routing run concurrently so speech
+  // never delays the agent starting work.
+  speakBack(text);
+
+  const sink = $('#sink').value;
+  const words = text.split(/\s+/).length;
+  if (sink === 'none') { setStatus('dispatched ' + words + ' words (not routed)'); return; }
+
+  setStatus('routing ' + words + ' words to ' + sink + '…');
+  try {
+    const res = await fetch('/route', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text: text, sink: sink, submit: $('#submit').checked })
+    });
+    const r = await res.json();
+    if (r.ok) setStatus('sent ' + words + ' words → ' + (r.detail || sink));
+    else { setStatus('route failed: ' + r.detail); addEntry('route failed: ' + r.detail, '', 'bad'); }
+  } catch (err) {
+    setStatus('route failed: ' + err.message);
+    addEntry('route failed: ' + err.message, '', 'bad');
+  }
+}
+
+function addEntry(text, meta, cls) {
+  const d = document.createElement('div');
+  d.className = 'ent' + (cls ? ' ' + cls : '');
+  const t = document.createElement('div'); t.className = 't'; t.textContent = text; d.appendChild(t);
+  if (meta) { const m = document.createElement('div'); m.className = 'm'; m.innerHTML = meta; d.appendChild(m); }
+  log.prepend(d);
+  while (log.children.length > 40) log.lastChild.remove();
+}
+
+// --- mode switching ---
+async function setMode(next) {
+  if (next === 'always') {
+    if (!(await initAudio())) return;
+    if (ctx.state === 'suspended') await ctx.resume();
+    mode = 'always';
+    rocket.classList.add('on'); rLabel.textContent = 'Always listening — ON';
+    listen.classList.add('on'); talk.classList.add('hidden');
+    calibrate();
+    try {
+      if ('wakeLock' in navigator) wakeLock = await navigator.wakeLock.request('screen');
+    } catch (e) { /* not fatal — screen may sleep */ }
+  } else {
+    mode = 'ptt';
+    if (vad === 'speech') closeSegment();
+    rocket.classList.remove('on'); rLabel.textContent = 'Always listening — off';
+    listen.classList.remove('on'); talk.classList.remove('hidden');
+    meterWrap.classList.remove('speech');
+    if (wakeLock) { try { await wakeLock.release(); } catch (e) {} wakeLock = null; }
+    setStatus('push to talk');
+  }
+}
+
+function calibrate() {
+  calAcc = []; calibrating = 16;   // ~1 s of ambient
+  setStatus('calibrating noise floor — stay quiet for a second');
+  meterLabel.textContent = 'calibrating…';
+}
+
+rocket.addEventListener('click', () => setMode(mode === 'always' ? 'ptt' : 'always'));
+$('#sens').addEventListener('input', applySens);
+$('#recal').addEventListener('click', () => { if (mode === 'always') calibrate(); else setStatus('only in always-listening mode'); });
+
+// Re-acquire the wake lock if the tab was backgrounded and came back.
+document.addEventListener('visibilitychange', async () => {
+  if (document.visibilityState === 'visible' && mode === 'always' && !wakeLock) {
+    try { if ('wakeLock' in navigator) wakeLock = await navigator.wakeLock.request('screen'); } catch (e) {}
+  }
+});
+
+// --- push to talk (disabled while always-listening) ---
+async function startPtt() {
+  if (mode !== 'ptt' || busy || pttRec) return;
+  if (!(await initAudio())) return;
+  if (ctx.state === 'suspended') await ctx.resume();
+  pttChunks = []; pttRec = true;
+  talk.classList.add('live'); tLabel.textContent = 'Listening…'; tHint.textContent = 'release to transcribe';
+}
+async function stopPtt() {
+  if (!pttRec) return;
+  pttRec = false; talk.classList.remove('live');
+  const samples = resample(flatten(pttChunks), inRate, RATE); pttChunks = [];
+  const secs = samples.length / RATE;
+  tLabel.textContent = 'Hold to talk'; tHint.textContent = 'or hold the space bar';
+  if (secs < 0.25) { setStatus('too short (' + secs.toFixed(2) + 's) — ignored'); return; }
+  tHint.textContent = secs.toFixed(1) + 's of audio';
+  await send(samples, false);
+}
+
+talk.addEventListener('pointerdown', e => { e.preventDefault(); startPtt(); });
+talk.addEventListener('pointerup', e => { e.preventDefault(); stopPtt(); });
+talk.addEventListener('pointercancel', () => stopPtt());
+talk.addEventListener('pointerleave', () => { if (pttRec) stopPtt(); });
+talk.addEventListener('contextmenu', e => e.preventDefault());
+addEventListener('keydown', e => {
+  if (e.code === 'Space' && !e.repeat && mode === 'ptt' && e.target.tagName !== 'SELECT') { e.preventDefault(); startPtt(); }
+});
+addEventListener('keyup', e => {
+  if (e.code === 'Space' && mode === 'ptt' && e.target.tagName !== 'SELECT') { e.preventDefault(); stopPtt(); }
+});
+
+$('#copy').addEventListener('click', async () => {
+  try { await navigator.clipboard.writeText(out.textContent); setStatus('copied'); }
+  catch { setStatus('clipboard blocked — select and copy manually'); }
+});
+$('#clear').addEventListener('click', () => { out.textContent = ''; pending.textContent = ''; log.innerHTML = ''; setStatus('cleared'); });
+
+// meter paint loop
+(function paint() {
+  const pct = Math.min(100, (lastRms / 0.08) * 100);
+  meter.style.width = pct.toFixed(1) + '%';
+  threshEl.style.left = Math.min(100, (threshold / 0.08) * 100).toFixed(1) + '%';
+  if (mode === 'always' && !calibrating && !meterLabel.textContent.startsWith('transcribing')) {
+    meterLabel.textContent = vad === 'speech' ? 'speech' : 'listening';
+  }
+  requestAnimationFrame(paint);
+})();
+</script>
+</body>
+</html>
