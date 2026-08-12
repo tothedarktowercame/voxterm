@@ -3,11 +3,14 @@
 
 Browser captures mic -> 16 kHz mono WAV -> POST here -> whisper.cpp -> text back.
 
-Stdlib only, no venv. Binds to loopback by default: reach it from the phone with
-an ssh tunnel (see README), which also satisfies the browser's secure-context
+Stdlib only except for the optional instant-reply path, which imports the
+anthropic SDK lazily — run under .venv/bin/python for that; everything else
+works without it. Binds to loopback by default: reach it from the phone with an
+ssh tunnel (see README), which also satisfies the browser's secure-context
 requirement for getUserMedia without any TLS setup.
 """
 import json
+import base64
 import os
 import re
 import subprocess
@@ -35,7 +38,9 @@ MAX_BYTES = 25 * 1024 * 1024
 # "Clojure" makes it worse (measured: "Tell Claude" -> "Tell Clojure"). Showing
 # each word in the syntactic position it actually occurs is what fixes it.
 DEFAULT_PROMPT = ("Ask Claude. Tell Claude. Claude Code. Claude writes Clojure, "
-                  "elisp, Emacs, nREPL, futon3c, voxterm, tmux.")
+                  "elisp, Emacs, nREPL, futon3c, voxterm, tmux. "
+                  "Bell Codex. Ask Codex. Codex agents. Zai runs GLM. "
+                  "Use Opus. Switch to Opus. Opus and Fable. Haiku and Sonnet.")
 PROMPT = os.environ.get("VOXTERM_PROMPT", DEFAULT_PROMPT)
 
 # Backstop for residue the prompt doesn't catch. Keep this list *small* and only
@@ -43,6 +48,14 @@ PROMPT = os.environ.get("VOXTERM_PROMPT", DEFAULT_PROMPT)
 # are real words here, so they must not be substituted.
 FIXUPS = [
     (re.compile(r"\bquad\b", re.I), "Claude"),
+    (re.compile(r"\b(?:codecs|kodak)\b", re.I), "Codex"),
+    # Seeding the prompt was not enough for Joe's pronunciation: still "OPE".
+    # Safe — "ope" is archaic-poetic, and \b protects open/hope/scope/rope.
+    (re.compile(r"\bopes?\b", re.I), "Opus"),
+    # Variants observed: "xi" (Joe), "Xai" and "Zaai" (TTS loop — the spelling
+    # shifts whenever the decoder prompt changes, so match a family, not a word).
+    # Drop the xai alternative if xAI the company ever comes up in dictation.
+    (re.compile(r"\b(?:x[ia]i?|zaa+i|z\.ai)\b", re.I), "Zai"),
     (re.compile(r"\bfuton\s*3\s*c\b", re.I), "futon3c"),
     (re.compile(r"\bem\s*axe?\b", re.I), "Emacs"),
 ]
@@ -52,6 +65,33 @@ def apply_fixups(text):
     for pattern, replacement in FIXUPS:
         text = pattern.sub(replacement, text)
     return text
+
+
+def trim_stutter(text):
+    """Drop a degenerate repeating tail. Returns (text, trimmed?).
+
+    whisper can fall into a decoder loop and emit something like
+    "...both through both through through both through through". Observed in
+    the wild, and not reproducible on demand, so it is handled after the fact
+    rather than tuned away. The signature is lexical: a real clause keeps
+    introducing new words, a loop stops. Beam search makes it rarer; this
+    catches what still gets through.
+    """
+    words = text.split()
+    if len(words) < 8:
+        return text, False
+    bare = [w.lower().strip(".,!?;:—-") for w in words]
+    for k in range(min(16, len(words)), 5, -1):
+        tail = bare[-k:]
+        if len(set(tail)) * 2 <= k:          # under half the words are distinct
+            seen, keep = set(), []
+            for word, low in zip(words[-k:], tail):
+                if low in seen:
+                    break
+                seen.add(low)
+                keep.append(word)
+            return " ".join(words[:-k] + keep).strip(), True
+    return text, False
 
 # Where dispatched ("rocket") text goes: emacs | tmux | none
 SINK = os.environ.get("VOXTERM_SINK", "emacs")
@@ -66,8 +106,32 @@ ELISP = os.path.join(HERE, "voxterm.el")
 # caught before the agent acts on it.
 TTS_DIR = os.path.expanduser("~/code/tts")
 PIPER = os.path.join(TTS_DIR, "bin", "piper")
-VOICE = os.path.join(TTS_DIR, "voices", "en_GB-semaine-medium.onnx")
+VOICES_DIR = os.path.join(TTS_DIR, "voices")
+VOICE = os.environ.get("VOXTERM_VOICE", "en_GB-semaine-medium")
+# en_GB-semaine is multi-speaker: 0 prudence, 1 spike, 2 obadiah, 3 poppy.
+SPEAKER = os.environ.get("VOXTERM_SPEAKER", "2")
+# Phoneme duration multiplier: < 1 speaks faster. The voice ships at 1.0, which
+# is a slow, deliberate read — fine for an audiobook, draggy for a REPL.
+LENGTH_SCALE = os.environ.get("VOXTERM_LENGTH_SCALE", "0.85")
+# The commentator speaks in a different voice from the agent. A fast guess and a
+# verified finding will sometimes disagree; you should never have to work out
+# which one you just heard.
+INSTANT_SPEAKER = os.environ.get("VOXTERM_INSTANT_SPEAKER", "3")
 MAX_SPEAK_CHARS = 600
+
+
+def voice_path(name):
+    """Resolve a voice name to its .onnx, refusing anything outside voices/."""
+    path = os.path.realpath(os.path.join(VOICES_DIR, (name or VOICE) + ".onnx"))
+    if not path.startswith(os.path.realpath(VOICES_DIR) + os.sep):
+        raise ValueError("voice outside voices/")
+    if not os.path.exists(path):
+        raise ValueError("no such voice: %s" % name)
+    return path
+
+
+def list_voices():
+    return sorted(f[:-5] for f in os.listdir(VOICES_DIR) if f.endswith(".onnx"))
 
 # Queue of agent text waiting to be spoken. Emacs enqueues (POST /say); the page
 # drains it (GET /say/next) because the box has no speaker — the phone does.
@@ -78,6 +142,154 @@ MAX_SAY_QUEUE = 8
 # Paragraphs that open with one of these are skipped: unspeakable, and the
 # buffer already shows them.
 _UNSPEAKABLE = re.compile(r"^\s*(```|~~~|\||#{1,6}\s|>\s)")
+
+
+# --- instant reply -----------------------------------------------------------
+# A commentator, not a worker: it reads the utterance and says what it
+# understood, while the real turn goes to the agent in the REPL untouched. Its
+# output is non-load-bearing, same as the audio channel it feeds.
+COMMENTATOR_MODEL = os.environ.get("VOXTERM_COMMENTATOR_MODEL", "claude-opus-5")
+
+# It thinks, it does not confirm. The line that matters is not "opinions vs no
+# opinions" — it is reasoning about the problem (judged on its merits, and
+# visibly checkable against the buffer) versus claiming agency over work it is
+# not doing (a claim the user cannot check and has no reason to doubt).
+COMMENTATOR_SYSTEM = """\
+You are the spoken channel of a voice terminal: the user's thinking partner
+while a separate, more capable agent does the actual work.
+
+Facts about this surface:
+
+- The user dictated the message; whisper small.en transcribed it, so identifiers
+  and proper nouns may be mangled. If a word is clearly wrong, take what was
+  obviously meant and carry on — do not stop to query it.
+- Your reply is synthesised to speech and heard, not read. Code, paths, symbols
+  and punctuation-heavy text do not survive being spoken.
+- A more capable agent is already working on this in an Emacs buffer the user is
+  looking at. You are not doing that work, and the user can see what it does.
+
+Say the most useful thing you can right now, from what you already know: the
+likely cause, the thing worth checking first, the caveat that will bite later,
+or a direct answer if it is a question you can answer. Be specific to what was
+actually said — a generic remark is worse than silence.
+
+You are reasoning, not reporting. Never claim to have looked at anything, and
+never say what the agent is going to do; you do not know, and the user cannot
+check that claim the way they can check an idea. Where you are unsure, say so in
+a few words and commit to a view anyway — a useful opinion that turns out wrong
+costs nothing here, because the buffer on screen carries the truth.
+
+Do not include internal or system XML tags in your response. One or two spoken
+sentences, in plain language a person can follow by ear."""
+
+
+CONTEXT_CHARS = int(os.environ.get("VOXTERM_CONTEXT_CHARS", "6000"))
+KEY_FILE = os.path.expanduser(os.environ.get("VOXTERM_KEY_FILE", "~/.anthropic-key"))
+
+
+def read_api_key():
+    """ANTHROPIC_API_KEY, else the key file. Returns None if neither exists.
+
+    Deliberately NOT written back into os.environ: this process spawns
+    whisper-cli, piper and emacsclient, and children inherit the environment.
+    Passing it to the client directly keeps the key out of those processes.
+    """
+    key = (os.environ.get("ANTHROPIC_API_KEY") or "").strip()
+    if key:
+        return key
+    try:
+        with open(KEY_FILE) as fh:
+            return fh.read().strip() or None
+    except OSError:
+        return None
+
+
+def fetch_context():
+    """Tail of the Emacs conversation buffer, or '' if unavailable.
+
+    Read-only and best-effort: with no context the commentator still works,
+    it is just reasoning cold.
+    """
+    if CONTEXT_CHARS <= 0:
+        return ""
+    expr = ('(progn (unless (fboundp (quote voxterm-context)) (load %s t t))'
+            ' (voxterm-context %d))' % (elisp_string(ELISP), CONTEXT_CHARS))
+    try:
+        proc = subprocess.run(["emacsclient", "-s", EMACS_SOCKET, "-e", expr],
+                              capture_output=True, text=True, timeout=10)
+        if proc.returncode != 0:
+            return ""
+        out = proc.stdout.strip()
+        if out.startswith('"') and out.endswith('"'):
+            out = out[1:-1]
+        return base64.b64decode(out).decode("utf-8", "replace") if out else ""
+    except Exception:
+        return ""
+
+
+# cli  — `claude -p`, billed to the Claude subscription. Slower (~4-5 s: process
+#        startup dominates) but needs no API credits.
+# api   — the SDK. Faster, but the API account is funded separately from a
+#         Claude subscription and needs its own credits.
+BACKEND = os.environ.get("VOXTERM_COMMENTATOR_BACKEND", "api")
+CLI_MODEL = os.environ.get("VOXTERM_CLI_MODEL", "opus")
+# Neutral cwd on purpose: run from ~/code and `claude -p` would inherit the
+# futon3c handoff protocol from ~/code/CLAUDE.md, which has nothing to do with
+# being a spoken commentator.
+CLI_CWD = os.environ.get("VOXTERM_CLI_CWD", "/tmp")
+NO_TOOLS = "Bash,Read,Write,Edit,Glob,Grep,WebFetch,WebSearch,Task,NotebookEdit"
+
+
+def commentate_cli(prompt):
+    """One-shot `claude -p`. Stateless: it represents no registered agent."""
+    proc = subprocess.run(
+        ["claude", "-p", prompt, "--model", CLI_MODEL,
+         "--system-prompt", COMMENTATOR_SYSTEM,
+         "--disallowed-tools", NO_TOOLS],
+        capture_output=True, text=True, timeout=90, cwd=CLI_CWD)
+    if proc.returncode != 0:
+        raise RuntimeError((proc.stderr or "claude -p failed").strip()[-300:])
+    return proc.stdout.strip()
+
+
+def commentate_api(prompt):
+    import anthropic  # lazy: the rest of the server runs without the SDK
+    key = read_api_key()
+    if not key:
+        raise RuntimeError("no API key: set ANTHROPIC_API_KEY or ~/.anthropic-key")
+    client = anthropic.Anthropic(api_key=key)
+    resp = client.messages.create(
+        model=COMMENTATOR_MODEL,
+        max_tokens=200,
+        system=COMMENTATOR_SYSTEM,
+        # Latency is the entire point, so thinking is off. Accepted on Opus 5 at
+        # effort high or below. The documented risk of disabling it — tool calls
+        # emitted as plain text — cannot apply here because no tools are given;
+        # the other, leaked thinking tags, is covered in the system prompt.
+        thinking={"type": "disabled"},
+        output_config={"effort": "low"},
+        messages=[{"role": "user", "content": prompt}],
+    )
+    if resp.stop_reason == "refusal":
+        raise RuntimeError("refusal")
+    return " ".join(b.text.strip() for b in resp.content
+                    if getattr(b, "type", None) == "text").strip()
+
+
+def commentate(text):
+    """Ask the fast model for its most useful immediate thought."""
+    context = fetch_context()
+    if context:
+        prompt = ("Here is the tail of the session the user is looking at, so "
+                  "you can see what has already been said and done:\n\n"
+                  "<transcript>\n%s\n</transcript>\n\n"
+                  "The user has just said: %s" % (context, text))
+    else:
+        prompt = text
+
+    said = commentate_cli(prompt) if BACKEND == "cli" else commentate_api(prompt)
+    # Same cleanup the queue gets: this is going straight to piper.
+    return sanitize_for_speech(said) or said
 
 
 def sanitize_for_speech(text):
@@ -127,8 +339,10 @@ def transcribe(wav_bytes, model_key="small.en", audio_ctx=0, greedy=True):
 
         text = " ".join(ln.strip() for ln in proc.stdout.splitlines() if ln.strip())
         text = apply_fixups(text)
+        text, stuttered = trim_stutter(text)
         return {
             "text": text,
+            "stutter_trimmed": stuttered,
             "model": model_key,
             "audio_ctx": audio_ctx,
             "greedy": greedy,
@@ -186,19 +400,23 @@ def route(text, sink=None, submit=None):
     return {"ok": p.returncode == 0, "sink": sink, "detail": detail[:300]}
 
 
-def synthesize(text):
+def synthesize(text, voice=None, speaker=None, length_scale=None):
     """Render TEXT to a 22 kHz WAV with piper. Returns the bytes."""
     text = text.strip()[:MAX_SPEAK_CHARS]
     if not text:
         raise ValueError("empty text")
+    model = voice_path(voice)
     fd, path = tempfile.mkstemp(suffix=".wav", prefix="voxterm-tts-")
     os.close(fd)
     try:
         # cwd matters: piper resolves its bundled espeak-ng data relative to
         # the install tree, not to the model path.
+        cmd = [PIPER, "-m", model, "-c", model + ".json", "-f", path,
+               "-s", str(speaker if speaker is not None else SPEAKER),
+               "--length-scale",
+               str(length_scale if length_scale is not None else LENGTH_SCALE)]
         proc = subprocess.run(
-            [PIPER, "-m", VOICE, "-c", VOICE + ".json", "-f", path],
-            input=text, capture_output=True, text=True, timeout=60, cwd=TTS_DIR)
+            cmd, input=text, capture_output=True, text=True, timeout=60, cwd=TTS_DIR)
         if proc.returncode != 0:
             raise RuntimeError((proc.stderr or "piper failed")[-300:])
         with open(path, "rb") as f:
@@ -235,19 +453,27 @@ class Handler(BaseHTTPRequestHandler):
             with _say_lock:
                 item = _say_queue.pop(0) if _say_queue else None
                 depth = len(_say_queue)
-            self._send(200, json.dumps({"text": item, "depth": depth}),
-                       "application/json")
+            body = {"text": None, "voice": None, "speaker": None,
+                    "length_scale": None, "depth": depth}
+            if item:
+                body.update(item)
+            self._send(200, json.dumps(body), "application/json")
         elif path == "/health":
             ok = os.path.exists(WHISPER)
             models = {k: os.path.exists(v) for k, v in MODELS.items()}
             self._send(200, json.dumps({"whisper": ok, "models": models,
-                                        "threads": THREADS}), "application/json")
+                                        "threads": THREADS,
+                                        "voice": VOICE, "speaker": SPEAKER,
+                                        "length_scale": LENGTH_SCALE,
+                                        "voices": list_voices()}),
+                       "application/json")
         else:
             self._send(404, "not found", "text/plain")
 
     def do_POST(self):
         parsed = urlparse(self.path)
-        if parsed.path not in ("/transcribe", "/route", "/speak", "/say"):
+        if parsed.path not in ("/transcribe", "/route", "/speak", "/say",
+                               "/commentate"):
             self._send(404, "not found", "text/plain")
             return
 
@@ -259,6 +485,39 @@ class Handler(BaseHTTPRequestHandler):
         body = self.rfile.read(length)
         q = parse_qs(parsed.query)
 
+        if parsed.path == "/commentate":
+            try:
+                payload = json.loads(body.decode("utf-8"))
+                started = time.monotonic()
+                said = commentate((payload.get("text") or "").strip())
+                self._send(200, json.dumps(
+                    {"ok": True, "text": said,
+                     "model": (CLI_MODEL + " (cli)" if BACKEND == "cli"
+                               else COMMENTATOR_MODEL),
+                     "speaker": INSTANT_SPEAKER,
+                     "ms": int((time.monotonic() - started) * 1000)}),
+                    "application/json")
+            except Exception as e:
+                # Never fatal: the coding path is untouched, so a failure here
+                # just means a quiet turn.
+                detail = repr(e)
+                low = detail.lower()
+                if "credit balance" in low or "billing" in low:
+                    # API credits are billed separately from a Claude subscription;
+                    # having Claude Code does not fund this.
+                    hint = "API account has no credits — top up in Plans & Billing"
+                elif "no api key" in low or "authentication" in low:
+                    hint = "set ANTHROPIC_API_KEY or ~/.anthropic-key"
+                elif "rate_limit" in low or "429" in low:
+                    hint = "rate limited — try again shortly"
+                elif "overloaded" in low or "529" in low:
+                    hint = "API overloaded — try again shortly"
+                else:
+                    hint = ""
+                self._send(200, json.dumps({"ok": False, "detail": detail[:300],
+                                            "hint": hint}), "application/json")
+            return
+
         if parsed.path == "/say":
             try:
                 payload = json.loads(body.decode("utf-8"))
@@ -268,11 +527,15 @@ class Handler(BaseHTTPRequestHandler):
                                                 "reason": "unspeakable"}),
                                "application/json")
                     return
+                item = {"text": spoken,
+                        "voice": payload.get("voice"),
+                        "speaker": payload.get("speaker"),
+                        "length_scale": payload.get("length_scale")}
                 with _say_lock:
                     # Stale speech is worse than dropped speech — keep it shallow.
                     if len(_say_queue) >= MAX_SAY_QUEUE:
                         _say_queue.pop(0)
-                    _say_queue.append(spoken)
+                    _say_queue.append(item)
                     depth = len(_say_queue)
                 self._send(200, json.dumps({"ok": True, "queued": True,
                                             "chars": len(spoken), "depth": depth}),
@@ -286,7 +549,9 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 payload = json.loads(body.decode("utf-8"))
                 started = time.monotonic()
-                wav = synthesize(payload.get("text", ""))
+                wav = synthesize(payload.get("text", ""),
+                                 payload.get("voice"), payload.get("speaker"),
+                                 payload.get("length_scale"))
                 self.send_response(200)
                 self.send_header("Content-Type", "audio/wav")
                 self.send_header("Content-Length", str(len(wav)))

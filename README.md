@@ -135,6 +135,39 @@ buffer after the insert.
 In push-to-talk mode each utterance routes on release. In always-listening mode text
 buffers until "rocket".
 
+## Instant reply — a thinking partner alongside the worker
+
+Tickbox **instant reply (Opus)**. On dispatch, the utterance goes to the agent in
+Emacs *and*, in parallel, to a fast model that says the most useful thing it can
+right now — likely cause, what to check first, the caveat that will bite, or a
+direct answer. You hear a considered thought within a couple of seconds while
+the deeper agent is still working.
+
+It is a commentator, not a worker: no tools, and it never touches the coding
+path. The one guardrail is narrow — **it reasons, it does not report.** It may be
+wrong about the problem (cheap: the buffer on screen carries the truth, and a
+wrong idea is still a thought worth having), but it must not claim to have looked
+at anything or announce what the agent is about to do, because those are claims
+you cannot check.
+
+It sees the **tail of whichever buffer you are focused on** (`VOXTERM_CONTEXT_CHARS`,
+default 6000, `0` disables), fetched read-only through `voxterm-context` over
+`emacsclient`. Same target-window logic as dictation, so text goes where you are
+looking and context comes from where you are looking.
+
+```sh
+export ANTHROPIC_API_KEY=sk-ant-...      # required; nothing else needs it
+./.venv/bin/python server.py             # SDK lives in the venv
+VOXTERM_COMMENTATOR_MODEL=claude-haiku-4-5   # cheaper alternative
+```
+
+Roughly $0.01 per utterance on Opus with 6 k chars of context. Thinking is off at
+effort `low` because latency is the whole point; that is safe here because the
+model is given no tools.
+
+Without a key the tickbox reports `set ANTHROPIC_API_KEY` and everything else
+carries on — a failure is a quiet turn.
+
 ## Speaking the agent's replies
 
 The first paragraph of a streamed reply is the agent's orientation for the turn.

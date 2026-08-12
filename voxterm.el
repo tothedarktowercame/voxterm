@@ -5,6 +5,8 @@
 
 ;;; Code:
 
+(require 'cl-lib)
+
 (defgroup voxterm nil
   "Dictated text arriving from the voxterm whisper server."
   :group 'external)
@@ -120,30 +122,101 @@ Toggle with \\[voxterm-toggle-speaking].")
                     (lambda (_status) (ignore-errors (kill-buffer (current-buffer))))
                     nil t t))))
 
-(defun voxterm--maybe-send (&optional force)
-  "Send the first paragraph of the accumulated stream, if there is one.
-With FORCE, send whatever has accumulated — used at end of stream for a
-reply that never contained a blank line."
+(defcustom voxterm-min-chars 120
+  "Keep adding paragraphs until the spoken text reaches this many characters.
+One turn in four opens with a paragraph under 100 characters — about six
+seconds of speech — too thin to be worth hearing on its own.  Measured
+over recent transcripts the median opener is 145 characters, so 120 pads
+the thin quarter while leaving a typical turn to send on its own; raising
+this much above the median makes ordinary turns wait for a second
+paragraph that may never come.
+
+Waiting is cheap either way: a tool line or the end of the stream flushes
+whatever has accumulated."
+  :type 'integer :group 'voxterm)
+
+(defcustom voxterm-max-paragraphs 3
+  "Never speak more than this many paragraphs, however short they are."
+  :type 'integer :group 'voxterm)
+
+(defun voxterm--collect (acc force)
+  "Text to speak from ACC, or nil to keep waiting.
+Only paragraphs closed by a blank line count — the trailing one may still
+be streaming.  FORCE means the turn has moved on (a tool call started, or
+the stream ended), so send whatever is in hand."
+  (let* ((ends-blank (string-match-p "\n[ \t]*\n[ \t]*\\'" acc))
+         (paras (split-string acc "\n[ \t]*\n" t "[ \t\n]+"))
+         (complete (if (or ends-blank force) paras (butlast paras)))
+         (out "") (n 0) (enough nil))
+    (catch 'done
+      (dolist (p complete)
+        (setq out (string-trim (concat out " " p))
+              n (1+ n))
+        (when (or (>= (length out) voxterm-min-chars)
+                  (>= n voxterm-max-paragraphs))
+          (setq enough t)
+          (throw 'done nil))))
+    (when (and (not (string-empty-p out))
+               (or force enough)
+               (string-match-p "[[:alpha:]]" out))
+      out)))
+
+(defun voxterm--flush (&optional force)
+  "Send accumulated prose if it is ready, or if FORCE."
   (unless voxterm--stream-sent
-    (let* ((acc voxterm--stream-acc)
-           (split (string-match "\n[ \t]*\n" acc))
-           (para (cond (split (substring acc 0 split))
-                       (force acc)
-                       (t nil))))
-      (when (and para (string-match-p "[[:alpha:]]" para))
+    (let ((out (voxterm--collect voxterm--stream-acc force)))
+      (when out
         (setq voxterm--stream-sent t)
-        (voxterm--post-say (string-trim para))))))
+        (voxterm--post-say out)))))
+
+(defun voxterm--tool-line-p (text)
+  "Non-nil if TEXT is claude-repl tool progress rather than agent prose.
+Tool events arrive through the same `agent-chat-stream-text' call
+\(claude-repl.el:1044\) and carry no distinguishing face — the tool styling
+is applied afterwards as an overlay — so they can only be recognised by
+shape.  Every line is \"[Name] preview\", per
+`claude-repl--format-tool-detail'."
+  (let ((lines (delq nil (mapcar (lambda (l)
+                                   (let ((s (string-trim l)))
+                                     (unless (string-empty-p s) s)))
+                                 (split-string text "\n")))))
+    (and lines
+         (not (cl-find-if-not (lambda (l) (string-prefix-p "[" l)) lines)))))
 
 (defun voxterm--stream-advice (text &rest _)
-  "Accumulate streamed TEXT and speak the first paragraph once it closes."
+  "Accumulate streamed TEXT and speak once enough prose has arrived."
   (when (and voxterm-speak-stream (stringp text) (not voxterm--stream-sent))
-    (setq voxterm--stream-acc (concat voxterm--stream-acc text))
-    (voxterm--maybe-send)))
+    (if (voxterm--tool-line-p text)
+        ;; A tool line means the agent has stopped writing prose and started
+        ;; working. Say what we have rather than waiting for a paragraph that
+        ;; may never come.
+        (voxterm--flush t)
+      (setq voxterm--stream-acc (concat voxterm--stream-acc text))
+      (voxterm--flush))))
 
 (defun voxterm--stream-end-advice (&rest _)
-  "Flush a single-paragraph reply, then reset for the next turn."
-  (when voxterm-speak-stream (voxterm--maybe-send t))
+  "Flush whatever is left, then reset for the next turn."
+  (when voxterm-speak-stream (voxterm--flush t))
   (setq voxterm--stream-acc "" voxterm--stream-sent nil))
+
+;;;###autoload
+(defun voxterm-context (&optional chars)
+  "Return the last CHARS of the conversation buffer, base64 encoded.
+Base64 because the text comes back through `emacsclient -e', where a
+multi-line propertised string is painful to parse reliably.  Text
+properties are dropped; the caller only wants the words."
+  (let* ((chars (or chars 6000))
+         (win (voxterm--target-window))
+         (buf (and (window-live-p win) (window-buffer win))))
+    (if (not (buffer-live-p buf))
+        ""
+      (with-current-buffer buf
+        (base64-encode-string
+         (encode-coding-string
+          (buffer-substring-no-properties (max (point-min) (- (point-max) chars))
+                                          (point-max))
+          'utf-8)
+         t)))))
 
 ;;;###autoload
 (defun voxterm-toggle-speaking ()

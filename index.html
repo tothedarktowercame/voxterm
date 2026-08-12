@@ -105,6 +105,7 @@
   .ent.bad { border-color: #7a2b33; } .ent.bad .t { color: #ff8a94; }
   .ent.fired { border-color: var(--rocket); } .ent.fired .t { color: #ffd489; }
   .ent.agent { border-color: #2f5d7a; } .ent.agent .t { color: #a8d0ea; }
+  .ent.instant { border-color: #4a3d7a; } .ent.instant .t { color: #c4b5ff; }
   #status { font-size: 12.5px; color: var(--dim); min-height: 18px; margin-bottom: 4px; }
 </style>
 </head>
@@ -148,8 +149,8 @@
     </label>
     <label>decode
       <select id="greedy">
-        <option value="1" selected>greedy</option>
-        <option value="0">beam 5</option>
+        <option value="1">greedy (faster, loops more)</option>
+        <option value="0" selected>beam 5</option>
       </select>
     </label>
     <label>sensitivity <input type="range" id="sens" min="1.5" max="9" step="0.25" value="3.5"></label>
@@ -161,6 +162,7 @@
       </select>
     </label>
     <label><input type="checkbox" id="submit" checked> press RET (emacs)</label>
+    <label><input type="checkbox" id="instant"> instant reply (Opus)</label>
     <label><input type="checkbox" id="speakagent" checked> speak agent replies</label>
     <label><input type="checkbox" id="speakback"> echo transcript (debug)</label>
   </div>
@@ -219,12 +221,13 @@ let queue = [], draining = false, wakeLock = null, speaking = false;
 
 // Speak arbitrary text through piper on the box and play it here. The audio is a
 // pure duplicate of the REPL buffer — every failure path degrades to silence.
-async function speakText(text) {
+async function speakText(text, voice, speaker, rate) {
   if (!ctx || !text || !text.trim() || speaking) return;
   try {
     const res = await fetch('/speak', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ text: text })
+      body: JSON.stringify({ text: text, voice: voice || null,
+                             speaker: speaker ?? null, length_scale: rate ?? null })
     });
     if (!res.ok) { setStatus('speak-back failed (' + res.status + ')'); return; }
     const synthMs = res.headers.get('X-Synth-Ms');
@@ -249,6 +252,28 @@ function speakBack(text) {
   return speakText(text);
 }
 
+// A fast model says what it understood, while the agent in the REPL does the
+// real work in parallel. Nothing depends on this — a failure is a quiet turn.
+async function instantReply(text) {
+  if (!$('#instant').checked) return;
+  try {
+    const res = await fetch('/commentate', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text: text })
+    });
+    const r = await res.json();
+    if (!r.ok) {
+      setStatus('instant reply off: ' + (r.hint || r.detail || 'failed'));
+      addEntry(r.hint || r.detail || 'commentator failed', 'instant · error', 'bad');
+      return;
+    }
+    addEntry(r.text, 'instant · ' + r.model + ' · ' + r.ms + ' ms', 'instant');
+    await speakText(r.text, null, r.speaker);
+  } catch (err) {
+    setStatus('instant reply failed: ' + err.message);
+  }
+}
+
 // Drain the agent-reply queue. Emacs enqueues via POST /say; nothing here blocks
 // the REPL, so a failed poll is simply a quiet turn.
 async function drainSay() {
@@ -258,8 +283,9 @@ async function drainSay() {
     if (!res.ok) return;
     const r = await res.json();
     if (r.text) {
-      addEntry(r.text, 'agent · spoken' + (r.depth ? ' · ' + r.depth + ' queued' : ''), 'agent');
-      await speakText(r.text);
+      addEntry(r.text, 'agent · ' + (r.voice || 'default voice')
+                       + (r.depth ? ' · ' + r.depth + ' queued' : ''), 'agent');
+      await speakText(r.text, r.voice, r.speaker, r.length_scale);
     }
   } catch (err) { /* server down or page offline — stay silent */ }
 }
@@ -413,7 +439,8 @@ function handle(r, roundTrip, fromVad) {
   }
   const text = (r.text || '').trim();
   const meta = [r.audio_sec + 's', '<b>' + r.infer_ms + ' ms</b>', roundTrip + ' ms rt',
-                'rtf ' + r.rtf, r.model, 'ac ' + (r.audio_ctx || 'full')].join(' · ');
+                'rtf ' + r.rtf, r.model, 'ac ' + (r.audio_ctx || 'full')]
+               .concat(r.stutter_trimmed ? ['<b>stutter trimmed</b>'] : []).join(' · ');
 
   if (!fromVad) {
     addEntry(text || '(silence)', meta, '');
@@ -450,6 +477,7 @@ async function dispatch(text) {
   // Fired, not awaited: the ack and the routing run concurrently so speech
   // never delays the agent starting work.
   speakBack(text);
+  instantReply(text);
 
   const sink = $('#sink').value;
   const words = text.split(/\s+/).length;
