@@ -197,13 +197,13 @@ let speechFrames = 0;
 const MAX_SEG_SEC = 20;
 
 // "rocket" as whisper actually renders it — including the homophone.
-const TRIGGER = /\b(?:rocket+|rock\s?it|rock\s?et|rocked|rockit)\b/gi;
+const TRIGGER = /\b(?:rocket+s?|rock\s?it|rock\s?et|rocked|rockit)\b/gi;
 
 // The keyword means "send", so it lands at the END of an utterance. Requiring that
 // keeps "the rocket ship launched" and "I rocked up late" from firing. One trailing
 // word is tolerated for a stray token.
 // Keyword(s) at the very end of a string, with surrounding punctuation.
-const TRAILING_TRIGGER = /(?:[\s.,!?;:]*\b(?:rocket+|rock\s?it|rock\s?et|rocked|rockit)\b[\s.,!?;:]*)+$/i;
+const TRAILING_TRIGGER = /(?:[\s.,!?;:]*\b(?:rocket+s?|rock\s?it|rock\s?et|rocked|rockit)\b[\s.,!?;:]*)+$/i;
 
 function findTrigger(text) {
   let m, last = null;
