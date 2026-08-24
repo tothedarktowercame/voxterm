@@ -72,6 +72,8 @@
   }
   #pending:empty::before { content: 'buffering… say "rocket" to send'; color: var(--dim); font-style: italic; }
   #pending.flash { border-color: var(--rocket); background: #241d10; }
+  #retract { margin: 6px 0 0; padding: 8px 14px; font-size: 14px; }
+  #pending:empty + #retract { display: none; }
 
   .row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; margin-bottom: 12px; }
   label { font-size: 12.5px; color: var(--dim); display: flex; gap: 6px; align-items: center; }
@@ -125,6 +127,7 @@
       <div id="meter"></div><div id="thresh"></div><div id="meterLabel">idle</div>
     </div>
     <div id="pending"></div>
+    <button id="retract" title="Drop the buffered text without sending">\u2715 retract buffer</button>
   </div>
 
   <button id="talk">
@@ -645,6 +648,7 @@ $('#copy').addEventListener('click', async () => {
   try { await navigator.clipboard.writeText(out.textContent); setStatus('copied'); }
   catch { setStatus('clipboard blocked — select and copy manually'); }
 });
+$('#retract').addEventListener('click', () => { const t = pending.textContent; setPending(''); addEntry(t, 'retracted by tap', ''); setStatus('buffer retracted — nothing sent'); });
 $('#clear').addEventListener('click', () => { out.textContent = ''; setPending(''); log.innerHTML = ''; setStatus('cleared'); });
 
 // meter paint loop
