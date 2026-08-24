@@ -82,6 +82,9 @@ are dropped rather than buffered. So is a **one-word segment that would open the
 paragraph** — judged by shape and position, not by the word: a noise burst comes
 back as "Puck." or "Watch.", and no paragraph starts that way. Mid-paragraph a
 single word is kept (it can be a real "Okay."), and the trigger word always fires.
+A pending buffer of **at most 6 words** that is neither continued nor sent within
+**12 s** is retracted (typing noise arrives as "Q Alm Tm Tuk"); anything longer is
+kept however long you pause.
 
 **Why it can look stuck.** Two things are easy to misread as "not sending":
 

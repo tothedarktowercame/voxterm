@@ -192,6 +192,12 @@ const PREROLL_FRAMES = 6;           // ~384 ms kept before speech is detected
 const START_FRAMES = 2;             // ~128 ms above threshold to open a segment
 const HANG_FRAMES = 11;             // ~700 ms below threshold to close it
 const MIN_SEG_SEC = 0.35;
+// A short pending buffer that is neither continued nor sent within this long is
+// noise (typing came through as "Q Alm Tm Tuk") — retract it. Only short ones:
+// a real dictation that pauses to think must not be thrown away.
+const PENDING_IDLE_MS = 12000;
+const PENDING_RETRACT_MAX_WORDS = 6;
+let pendingAt = 0;
 const MIN_SPEECH_FRAMES = 5;        // ~320 ms above threshold, else it was a click/cough, not speech
 let speechFrames = 0;
 const MAX_SEG_SEC = 20;
@@ -480,9 +486,8 @@ function handle(r, roundTrip, fromVad) {
     addEntry(text, meta + ' · one-word opener, dropped', ''); return;
   }
   if (!m) {
-    pending.textContent += (pending.textContent ? ' ' : '') + text;
+    setPending(pending.textContent + (pending.textContent ? ' ' : '') + text);
     addEntry(text, meta, '');
-    preview(pending.textContent);
     setStatus('buffered — say "rocket" to send');
     return;
   }
@@ -495,9 +500,9 @@ function handle(r, roundTrip, fromVad) {
   if (!/\w/.test(after)) after = '';   // bare punctuation after the keyword is not a next buffer
   const payload = (pending.textContent + ' ' + before).trim();
   addEntry(text, meta + ' · <b>ROCKET</b>', 'fired');
-  pending.textContent = after;
+  setPending(after, !payload);   // voxterm-insert clears the overlay; re-show any carry-over
   if (payload) dispatch(payload); else setStatus('rocket with empty buffer — nothing sent');
-  if (after) preview(after);   // voxterm-insert clears the overlay; re-show any carry-over
+  if (payload && after) preview(after);
 }
 
 // Mirror the pending buffer into Emacs as ghost text (see voxterm-preview).
@@ -507,6 +512,25 @@ function preview(text) {
   fetch('preview', { method: 'POST', headers: { 'Content-Type': 'application/json' },
                      body: JSON.stringify({ text: text, sink: 'emacs' }) }).catch(() => {});
 }
+
+// Every write to the pending buffer goes through here: it stamps the idle clock
+// and mirrors the buffer to Emacs (unless a dispatch is about to do that).
+function setPending(text, mirror = true) {
+  pending.textContent = text;
+  pendingAt = performance.now();
+  if (mirror) preview(text);
+}
+
+setInterval(() => {
+  const text = pending.textContent;
+  if (!text || mode !== 'always') return;
+  const words = text.split(/\s+/).filter(Boolean).length;
+  if (words <= PENDING_RETRACT_MAX_WORDS && performance.now() - pendingAt > PENDING_IDLE_MS) {
+    addEntry(text, 'retracted — ' + words + ' word' + (words === 1 ? '' : 's') + ', idle ' + Math.round(PENDING_IDLE_MS / 1000) + ' s', '');
+    setPending('');
+    setStatus('retracted a short idle buffer');
+  }
+}, 1000);
 
 async function dispatch(text) {
   out.textContent += (out.textContent ? '\n' : '') + text;
@@ -621,7 +645,7 @@ $('#copy').addEventListener('click', async () => {
   try { await navigator.clipboard.writeText(out.textContent); setStatus('copied'); }
   catch { setStatus('clipboard blocked — select and copy manually'); }
 });
-$('#clear').addEventListener('click', () => { out.textContent = ''; pending.textContent = ''; log.innerHTML = ''; preview(''); setStatus('cleared'); });
+$('#clear').addEventListener('click', () => { out.textContent = ''; setPending(''); log.innerHTML = ''; setStatus('cleared'); });
 
 // meter paint loop
 (function paint() {
