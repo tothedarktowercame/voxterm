@@ -126,7 +126,11 @@ Returns the buffer name, or nil if the target is not writable."
                (not (string-empty-p (string-trim text))))
       (with-current-buffer buf
         (let* ((pos (window-point win))
-               (ov (make-overlay pos pos buf t nil)))
+               ;; Both ends advance: the REPL streams agent output at exactly
+               ;; this position, and with front-advance alone the overlay
+               ;; stayed behind the stream and scrolled off with the ghost
+               ;; text (only a line of it visible, 2026-08-24).
+               (ov (make-overlay pos pos buf t t)))
           ;; A before-string, not an after-string: the input line sits at the
           ;; bottom of the window, and redisplay only keeps the cursor row on
           ;; screen — text *after* point spilled below the edge, so only the
