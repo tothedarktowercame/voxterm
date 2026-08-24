@@ -165,6 +165,7 @@
     <label><input type="checkbox" id="instant"> instant reply (Opus)</label>
     <label><input type="checkbox" id="speakagent" checked> speak agent replies</label>
     <label><input type="checkbox" id="speakback"> echo transcript (debug)</label>
+    <label><input type="checkbox" id="gatemic"> mute mic while speaking (speaker, not headphones)</label>
   </div>
 
   <div id="out"></div>
@@ -191,6 +192,8 @@ const PREROLL_FRAMES = 6;           // ~384 ms kept before speech is detected
 const START_FRAMES = 2;             // ~128 ms above threshold to open a segment
 const HANG_FRAMES = 11;             // ~700 ms below threshold to close it
 const MIN_SEG_SEC = 0.35;
+const MIN_SPEECH_FRAMES = 5;        // ~320 ms above threshold, else it was a click/cough, not speech
+let speechFrames = 0;
 const MAX_SEG_SEC = 20;
 
 // "rocket" as whisper actually renders it — including the homophone.
@@ -199,6 +202,9 @@ const TRIGGER = /\b(?:rocket+|rock\s?it|rock\s?et|rocked|rockit)\b/gi;
 // The keyword means "send", so it lands at the END of an utterance. Requiring that
 // keeps "the rocket ship launched" and "I rocked up late" from firing. One trailing
 // word is tolerated for a stray token.
+// Keyword(s) at the very end of a string, with surrounding punctuation.
+const TRAILING_TRIGGER = /(?:[\s.,!?;:]*\b(?:rocket+|rock\s?it|rock\s?et|rocked|rockit)\b[\s.,!?;:]*)+$/i;
+
 function findTrigger(text) {
   let m, last = null;
   TRIGGER.lastIndex = 0;
@@ -208,7 +214,8 @@ function findTrigger(text) {
   if (tail && tail.split(/\s+/).length > 1) return null;
   return last;
 }
-// whisper's stock hallucinations on near-silence
+// whisper's stock hallucinations on near-silence — a fixed, well-known list, not a
+// guess about words. Everything else is judged structurally (see below).
 const JUNK = /^(?:thank you\.?|thanks for watching!?|you|bye\.?|\.|,)$/i;
 
 let ctx = null, node = null, inRate = RATE;
@@ -218,13 +225,15 @@ let pttChunks = [];
 let ring = [], segFrames = [], vad = 'silence', above = 0, below = 0;
 let noiseFloor = 0.004, threshold = 0.014, lastRms = 0, calibrating = 0, calAcc = [];
 let queue = [], draining = false, wakeLock = null, speaking = false;
+let speakBusy = false;              // held from speakText entry, so overlapping polls can't stack playback
 
 // Speak arbitrary text through piper on the box and play it here. The audio is a
 // pure duplicate of the REPL buffer — every failure path degrades to silence.
 async function speakText(text, voice, speaker, rate) {
-  if (!ctx || !text || !text.trim() || speaking) return;
+  if (!ctx || !text || !text.trim() || speaking || speakBusy) return;
+  speakBusy = true;
   try {
-    const res = await fetch('/speak', {
+    const res = await fetch('speak', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ text: text, voice: voice || null,
                              speaker: speaker ?? null, length_scale: rate ?? null })
@@ -243,7 +252,7 @@ async function speakText(text, voice, speaker, rate) {
     setStatus('speak-back failed: ' + err.message);
   } finally {
     // Short tail so room reverb doesn't reopen the gate mid-decay.
-    setTimeout(() => { speaking = false; }, 250);
+    setTimeout(() => { speaking = false; speakBusy = false; }, 250);
   }
 }
 
@@ -257,7 +266,7 @@ function speakBack(text) {
 async function instantReply(text) {
   if (!$('#instant').checked) return;
   try {
-    const res = await fetch('/commentate', {
+    const res = await fetch('commentate', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ text: text })
     });
@@ -277,13 +286,14 @@ async function instantReply(text) {
 // Drain the agent-reply queue. Emacs enqueues via POST /say; nothing here blocks
 // the REPL, so a failed poll is simply a quiet turn.
 async function drainSay() {
-  if (!$('#speakagent').checked || speaking || !ctx) return;
+  if (!$('#speakagent').checked || speaking || speakBusy || !ctx) return;
   try {
-    const res = await fetch('/say/next');
+    const res = await fetch('say/next');
     if (!res.ok) return;
     const r = await res.json();
     if (r.text) {
-      addEntry(r.text, 'agent · ' + (r.voice || 'default voice')
+      addEntry(r.text, 'agent · ' + (r.kind || 'paragraph')
+                       + (r.elapsed_ms ? ' · <b>' + r.elapsed_ms + ' ms</b> to speech' : '')
                        + (r.depth ? ' · ' + r.depth + ' queued' : ''), 'agent');
       await speakText(r.text, r.voice, r.speaker, r.length_scale);
     }
@@ -322,9 +332,13 @@ function onFrame(e) {
 
   if (mode === 'ptt') { if (pttRec) pttChunks.push(buf); return; }
 
-  // The speaker is audible to the mic. Without this gate the listener hears the
-  // acknowledgement, transcribes it, and in rocket mode can dispatch it again.
-  if (speaking) {
+  // On a loudspeaker the mic hears the TTS: without this gate the listener
+  // transcribes the reply and in rocket mode can dispatch it again. On headphones
+  // there is no loop, and the gate just throws away everything said while a reply
+  // plays — measured as "losing about half of what I say" (2026-08-24). Off by
+  // default; it also discards any segment in progress, so only enable it when
+  // the speaker really is audible to the mic.
+  if (speaking && $('#gatemic').checked) {
     ring.length = 0; above = 0; below = 0;
     if (vad === 'speech') { vad = 'silence'; segFrames = []; meterWrap.classList.remove('speech'); }
     return;
@@ -346,9 +360,10 @@ function onFrame(e) {
 
   if (vad === 'silence') {
     above = lastRms > threshold ? above + 1 : 0;
-    if (above >= START_FRAMES) { vad = 'speech'; below = 0; segFrames = ring.slice(); meterWrap.classList.add('speech'); }
+    if (above >= START_FRAMES) { vad = 'speech'; below = 0; speechFrames = above; segFrames = ring.slice(); meterWrap.classList.add('speech'); }
   } else {
     segFrames.push(buf);
+    if (lastRms > threshold) speechFrames++;
     below = lastRms > threshold ? 0 : below + 1;
     const secs = segFrames.length * FRAME / RATE;
     if (below >= HANG_FRAMES || secs >= MAX_SEG_SEC) closeSegment();
@@ -361,6 +376,10 @@ function closeSegment() {
   const frames = segFrames; segFrames = [];
   const secs = frames.length * FRAME / RATE;
   if (secs < MIN_SEG_SEC) return;
+  // A noise burst opens the gate and the hang time pads it to 1-3 s of mostly
+  // silence; whisper then hallucinates on it ("Claude Codex.", "Thank you.").
+  // Not sending it is cheaper and more reliable than filtering the text.
+  if (speechFrames < MIN_SPEECH_FRAMES) { addEntry('(noise burst — ' + secs.toFixed(1) + 's, not sent)', '', ''); return; }
   queue.push(flatten(frames));
   drain();
 }
@@ -418,7 +437,7 @@ async function send(samples, fromVad) {
   else meterLabel.textContent = 'transcribing ' + secs.toFixed(1) + 's…';
   try {
     const qs = new URLSearchParams({ model: $('#model').value, ac: $('#ac').value, greedy: $('#greedy').value });
-    const res = await fetch('/transcribe?' + qs, {
+    const res = await fetch('transcribe?' + qs, {
       method: 'POST', headers: { 'Content-Type': 'audio/wav' }, body: encodeWav(samples, RATE)
     });
     const r = await res.json();
@@ -452,21 +471,41 @@ function handle(r, roundTrip, fromVad) {
 
   if (!text || JUNK.test(text.trim())) { addEntry(text || '(nothing)', meta + ' · dropped', ''); return; }
 
+  // A one-word segment opening a paragraph is almost never dictation — it is a
+  // noise burst rendered as a word ("Puck.", "Pelley.", "Watch."). Judged by
+  // shape and position, not by which word it is. Mid-paragraph a single word
+  // ("Okay.") can be real, so it is kept; the trigger word is always honoured.
   const m = findTrigger(text);
+  if (!m && !pending.textContent && text.split(/\s+/).filter(Boolean).length === 1) {
+    addEntry(text, meta + ' · one-word opener, dropped', ''); return;
+  }
   if (!m) {
     pending.textContent += (pending.textContent ? ' ' : '') + text;
     addEntry(text, meta, '');
+    preview(pending.textContent);
     setStatus('buffered — say "rocket" to send');
     return;
   }
 
   // Keyword found: everything before it is the payload, anything after starts the next buffer.
-  const before = text.slice(0, m.index).trim();
-  const after = text.slice(m.index + m[0].length).trim();
+  // findTrigger returns the LAST match, so a repeated/stuttered keyword ("Rock it. Rocket.")
+  // would leave the first copy in the payload — strip any trailing repeats too.
+  const before = text.slice(0, m.index).replace(TRAILING_TRIGGER, '').trim();
+  let after = text.slice(m.index + m[0].length).trim();
+  if (!/\w/.test(after)) after = '';   // bare punctuation after the keyword is not a next buffer
   const payload = (pending.textContent + ' ' + before).trim();
   addEntry(text, meta + ' · <b>ROCKET</b>', 'fired');
   pending.textContent = after;
   if (payload) dispatch(payload); else setStatus('rocket with empty buffer — nothing sent');
+  if (after) preview(after);   // voxterm-insert clears the overlay; re-show any carry-over
+}
+
+// Mirror the pending buffer into Emacs as ghost text (see voxterm-preview).
+// Fire-and-forget: a failure just means no preview.
+function preview(text) {
+  if ($('#sink').value !== 'emacs') return;
+  fetch('preview', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+                     body: JSON.stringify({ text: text, sink: 'emacs' }) }).catch(() => {});
 }
 
 async function dispatch(text) {
@@ -485,7 +524,7 @@ async function dispatch(text) {
 
   setStatus('routing ' + words + ' words to ' + sink + '…');
   try {
-    const res = await fetch('/route', {
+    const res = await fetch('route', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ text: text, sink: sink, submit: $('#submit').checked })
     });
@@ -582,7 +621,7 @@ $('#copy').addEventListener('click', async () => {
   try { await navigator.clipboard.writeText(out.textContent); setStatus('copied'); }
   catch { setStatus('clipboard blocked — select and copy manually'); }
 });
-$('#clear').addEventListener('click', () => { out.textContent = ''; pending.textContent = ''; log.innerHTML = ''; setStatus('cleared'); });
+$('#clear').addEventListener('click', () => { out.textContent = ''; pending.textContent = ''; log.innerHTML = ''; preview(''); setStatus('cleared'); });
 
 // meter paint loop
 (function paint() {

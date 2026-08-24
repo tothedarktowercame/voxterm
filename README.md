@@ -12,6 +12,15 @@ VOXTERM_THREADS=16 VOXTERM_PORT=9000 python3 server.py   # knobs
 
 ## Reach it from the phone
 
+**Direct (since 2026-08-24):** `https://zone.hyperreal.enterprises/voxterm/` — Caddy
+proxies to the loopback server behind HTTP basic auth (user `joe`, password in
+`~/.voxterm-web-password` on zone; hash lives in `/etc/caddy/Caddyfile`). TLS from
+Caddy satisfies the secure-context requirement, so no tunnel is needed. The page's
+fetches are relative, so it works under the `/voxterm/` prefix. The server itself is a
+systemd user unit (`systemctl --user status voxterm`), still bound to loopback only.
+
+### Via ssh tunnel (older method)
+
 The page needs a **secure context** for `getUserMedia`. `localhost` counts as one, so
 an ssh tunnel avoids TLS entirely:
 
@@ -69,7 +78,25 @@ whisper produces them.
 Segments are POSTed strictly in order, so buffered text stays coherent even when you
 talk faster than inference. `navigator.wakeLock` holds the screen on while listening.
 Whisper's stock near-silence hallucinations ("Thank you.", "Thanks for watching!")
-are dropped rather than buffered.
+are dropped rather than buffered. So is a **one-word segment that would open the
+paragraph** — judged by shape and position, not by the word: a noise burst comes
+back as "Puck." or "Watch.", and no paragraph starts that way. Mid-paragraph a
+single word is kept (it can be a real "Okay."), and the trigger word always fires.
+
+**Why it can look stuck.** Two things are easy to misread as "not sending":
+
+1. Segments appear in the pending buffer as they are transcribed, but *nothing
+   reaches Emacs until you say "rocket"* (or tap dispatch). Buffered ≠ sent.
+2. Transcription latency scales with the model. `small.en` is ~0.1× realtime
+   (a 6 s utterance in ~0.5 s); `large-v3-turbo` is ~1× realtime, so a 40 s
+   utterance takes ~40 s to come back — a long silent gap before the segment
+   even shows. Keep the page's model selector on **small.en** for conversation;
+   the vocabulary prompt and `FIXUPS` are tuned for it anyway.
+
+**Headphones vs speaker.** By default the mic stays live while a reply is spoken,
+so you can talk over it. On a loudspeaker the mic hears the TTS; tick **mute mic
+while speaking** to gate it — at the cost of losing anything you say during
+playback.
 
 Tuning: the meter shows live level with the threshold as a vertical marker. If it
 triggers on room noise, raise **sensitivity**; if it clips your first syllable, lower
@@ -85,7 +112,8 @@ it. **Recalibrate** re-samples the noise floor.
 | small.en | full | greedy | 1513 ms | |
 | small.en | full | beam 5 | 1619 ms | beam buys nothing here |
 | small.en | 128 | greedy | 1949 ms | breaks — output truncates |
-| large-v3-turbo | full | greedy | 6663 ms | best text, too slow to talk to |
+| large-v3-turbo | full | greedy | 6663 ms | best text; fixed ~7-9 s per call regardless of clip length |
+| large-v3-turbo | fitted (512 for 6 s) | greedy | **3.6 s** | same text as full; 20 s clip: 5.8 s vs 12.9 s (2026-08-24) |
 | large-v3-turbo | 256 | greedy | 10995 ms | **worse** — see below |
 
 Two counterintuitive results:
@@ -94,6 +122,21 @@ Two counterintuitive results:
   audio context falls into a repetition loop ("Research Research process, the research"),
   which triggers decoder fallbacks and costs *more* than full context. Use `-ac` with
   small models only.
+- **Turbo hallucinates prompt words on noise bursts** ("Claude Codex." opening a real
+  segment). Dropping the prompt is not the fix — without it turbo gives "FUTON 3C",
+  "T-Mux", "nRepl". Instead the page refuses segments with <320 ms above threshold,
+  and the server strips a leading <=3-word sentence made only of prompt vocabulary.
+- **Short clips go to small.en** (`VOXTERM_SHORT_SEC=2.5`, `VOXTERM_SHORT_MODEL`),
+  whatever the page selects: a 1.4 s "Rocket." costs turbo ~8 s (the prompt
+  provokes a repetition, whisper's temperature fallback re-decodes several times)
+  and small.en 0.6 s. Do not disable fallback (`-nf`) to save that time: without it
+  turbo emitted "Rocket." x55.
+- **`-ac` is a window, not a speed knob.** 1500 frames = 30 s, so `-ac 512` sees
+  ~10 s; a longer clip is silently truncated or garbled past that point (an 18 s
+  clip: 21 words of nonsense vs 32 right at full context). The server now scales
+  the requested context to the clip length plus ~5 s (`fit_audio_ctx`), so the
+  page's `ac` is a floor for short utterances, not a cap on long ones. The margin
+  matters: at 2.5 s turbo emitted a 20 s passage twice.
 - **`-ac 128` is past the cliff** — it doesn't just degrade, it truncates and gets slower.
 
 ## Routing
@@ -133,7 +176,10 @@ To auto-submit into a REPL, add to `voxterm-after-insert-hook` — it runs in th
 buffer after the insert.
 
 In push-to-talk mode each utterance routes on release. In always-listening mode text
-buffers until "rocket".
+buffers until "rocket" — and the buffer is mirrored into Emacs as ghost text at
+point in the target buffer (`voxterm-preview`, via `POST /preview`), so you can see
+what is about to be sent, noise residue included, before saying the word. It is an
+overlay: nothing enters the buffer text until dispatch.
 
 ## Instant reply — a thinking partner alongside the worker
 

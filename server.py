@@ -67,6 +67,69 @@ def apply_fixups(text):
     return text
 
 
+PROMPT_WORDS = frozenset(w.lower().strip(".,") for w in PROMPT.split())
+
+
+def strip_prompt_echo(text, max_words=3):
+    """Drop a short leading sentence made only of prompt vocabulary.
+
+    On a noise burst before the first real word, the decoder echoes the
+    prompt: "Claude Codex. And our own development as people..." (turbo,
+    2026-08-24). Real dictation does not open with a <=3-word sentence built
+    solely from the vocabulary list, so such a sentence is treated as echo.
+    Applied repeatedly, so a whole segment of echo becomes empty.
+    Returns (text, stripped?)."""
+    stripped = False
+    while True:
+        m = re.match(r"\s*([^.!?]+)[.!?]+\s*", text)
+        if not m:
+            break
+        words = m.group(1).split()
+        if not words or len(words) > max_words:
+            break
+        if not all(w.lower().strip(".,;:'\"") in PROMPT_WORDS for w in words):
+            break
+        text = text[m.end():]
+        stripped = True
+    return text.strip(), stripped
+
+
+def collapse_repeats(text, min_run=3, max_n=8):
+    """Collapse a run of >= MIN_RUN identical consecutive n-grams to one.
+
+    trim_stutter only looks at the tail; a decoder loop in the *body* — 20 s of
+    "per the main title, " x36 from large-v3-turbo on 2026-08-24 — sails past
+    it. Nobody dictates the same phrase three times running, so a run of three
+    is a loop, whatever its length. Shortest n-gram first: longest-first sees
+    36 x "per the main title," as 18 x an 8-gram and leaves a pair behind.
+    Returns (text, collapsed?)."""
+    words = text.split()
+    key = [w.lower().strip(".,!?;:\u2014-") for w in words]
+    changed = False
+    for n in range(1, max_n + 1):
+        i = 0
+        out_w, out_k = [], []
+        while i < len(words):
+            run = 1
+            while (i + (run + 1) * n <= len(words)
+                   and key[i + run * n:i + (run + 1) * n] == key[i:i + n]):
+                run += 1
+            if run >= min_run:
+                out_w.extend(words[i:i + n]); out_k.extend(key[i:i + n])
+                i += run * n
+                changed = True
+            else:
+                out_w.append(words[i]); out_k.append(key[i])
+                i += 1
+        words, key = out_w, out_k
+    # Whole-passage duplication (66 words twice, turbo at a tight context)
+    # is beyond any n-gram window: collapse while the text is k identical halves.
+    while len(words) >= 8 and len(words) % 2 == 0 and key[:len(key) // 2] == key[len(key) // 2:]:
+        words, key = words[:len(words) // 2], key[:len(key) // 2]
+        changed = True
+    return " ".join(words), changed
+
+
 def trim_stutter(text):
     """Drop a degenerate repeating tail. Returns (text, trimmed?).
 
@@ -138,6 +201,9 @@ def list_voices():
 _say_lock = threading.Lock()
 _say_queue = []
 MAX_SAY_QUEUE = 8
+# Speech older than this is dropped at dequeue: the page may have been away for
+# hours while Emacs kept enqueueing, and a backlog read out in a burst is noise.
+SAY_TTL_S = float(os.environ.get("VOXTERM_SAY_TTL_S", "90"))
 
 # Paragraphs that open with one of these are skipped: unspeakable, and the
 # buffer already shows them.
@@ -313,19 +379,79 @@ def sanitize_for_speech(text):
 _gpu_lock = threading.Lock()
 
 
+FRAMES_PER_SEC = 1500 / 30.0     # whisper encoder: 1500 frames per 30 s window
+FULL_CTX = 1500
+
+
+def fit_audio_ctx(requested, duration_sec, margin=256):
+    """Smallest context >= REQUESTED that covers DURATION_SEC, or 0 for full.
+
+    MARGIN is ~5 s: with only 2.5 s (128) large-v3-turbo emitted a 20 s
+    passage twice at -ac 1152 and once, correctly, at 1280 (2026-08-24)."""
+    need = int(duration_sec * FRAMES_PER_SEC) + margin
+    need = ((need + 63) // 64) * 64
+    ctx = max(requested, need)
+    return 0 if ctx >= FULL_CTX else ctx
+
+
+# Keep the last N clips on disk so a bad transcript can be re-run offline
+# with other settings — the only way to tell "whisper dropped it" from "the
+# page never sent it". 0 disables.
+KEEP_CLIPS = int(os.environ.get("VOXTERM_KEEP_CLIPS", "12"))
+CLIP_DIR = os.environ.get("VOXTERM_CLIP_DIR", "/tmp/voxterm-clips")
+
+
+def keep_clip(wav_bytes, model_key):
+    if KEEP_CLIPS <= 0:
+        return None
+    try:
+        os.makedirs(CLIP_DIR, exist_ok=True)
+        name = "%s-%s.wav" % (time.strftime("%Y%m%d-%H%M%S"), model_key)
+        with open(os.path.join(CLIP_DIR, name), "wb") as f:
+            f.write(wav_bytes)
+        old = sorted(n for n in os.listdir(CLIP_DIR) if n.endswith(".wav"))
+        for n in old[:-KEEP_CLIPS]:
+            os.unlink(os.path.join(CLIP_DIR, n))
+        return name
+    except OSError:
+        return None
+
+
+# Clips shorter than this go to SHORT_MODEL whatever the page asked for: they
+# are the trigger word or a noise burst, and large-v3-turbo spends ~8 s on
+# "Rocket." (prompt-induced temperature fallback) where small.en takes 0.6 s.
+SHORT_SEC = float(os.environ.get("VOXTERM_SHORT_SEC", "2.5"))
+SHORT_MODEL = os.environ.get("VOXTERM_SHORT_MODEL", "small.en")
+
+
 def transcribe(wav_bytes, model_key="small.en", audio_ctx=0, greedy=True):
-    model = MODELS.get(model_key, MODELS["small.en"])
+    clip = keep_clip(wav_bytes, model_key)
     fd, path = tempfile.mkstemp(suffix=".wav", prefix="voxterm-")
     os.write(fd, wav_bytes)
     os.close(fd)
     try:
         with wave.open(path) as w:
             duration = w.getnframes() / float(w.getframerate())
+        if duration < SHORT_SEC and SHORT_MODEL in MODELS:
+            model_key = SHORT_MODEL
+        model = MODELS.get(model_key, MODELS["small.en"])
 
         cmd = [WHISPER, "-m", model, "-f", path, "-t", str(THREADS),
                "-nt", "-np", "-l", "en", "-sns"]
         if PROMPT:
             cmd += ["--prompt", PROMPT]
+        # A clipped context also applies to large-v3-turbo now that it is
+        # fitted to the clip (below): measured 2026-08-24, same text as full
+        # context at 6 s and 20 s, 2-2.5x faster. The README's turbo loop was
+        # a window shorter than the audio, which fit_audio_ctx rules out.
+        # The encoder context is a window on the audio: 1500 frames = 30 s, so
+        # -ac 512 sees ~10 s and everything after it is dropped or garbled
+        # (measured 2026-08-24 on an 18 s clip: 21 words of nonsense vs 32
+        # right at full context — "eating half of what I say"). Scale the
+        # requested context up to cover the clip, with a margin; at the top
+        # just use the full context.
+        if audio_ctx:
+            audio_ctx = fit_audio_ctx(audio_ctx, duration)
         if audio_ctx:
             cmd += ["-ac", str(audio_ctx)]
         if greedy:
@@ -339,12 +465,16 @@ def transcribe(wav_bytes, model_key="small.en", audio_ctx=0, greedy=True):
 
         text = " ".join(ln.strip() for ln in proc.stdout.splitlines() if ln.strip())
         text = apply_fixups(text)
+        text, echoed = strip_prompt_echo(text)
+        text, collapsed = collapse_repeats(text)
         text, stuttered = trim_stutter(text)
         return {
             "text": text,
-            "stutter_trimmed": stuttered,
+            "stutter_trimmed": stuttered or collapsed,
+            "prompt_echo_stripped": echoed,
             "model": model_key,
             "audio_ctx": audio_ctx,
+            "clip": clip,
             "greedy": greedy,
             "threads": THREADS,
             "audio_sec": round(duration, 2),
@@ -363,6 +493,21 @@ def elisp_string(s):
     out = s.replace("\\", "\\\\").replace('"', '\\"')
     out = out.replace("\n", "\\n").replace("\r", "").replace("\t", "\\t")
     return '"%s"' % out
+
+
+def preview(text, sink=None):
+    """Mirror the pending buffer into Emacs as an overlay. Best effort."""
+    sink = sink or SINK
+    if sink != "emacs":
+        return {"ok": True, "sink": sink, "detail": "no preview for this sink"}
+    expr = ('(progn (unless (fboundp (quote voxterm-preview)) (load %s t t))'
+            ' (voxterm-preview %s))' % (elisp_string(ELISP), elisp_string(text)))
+    try:
+        p = subprocess.run(["emacsclient", "-s", EMACS_SOCKET, "-e", expr],
+                           capture_output=True, text=True, timeout=5)
+        return {"ok": p.returncode == 0, "detail": (p.stdout or p.stderr).strip()}
+    except Exception as e:
+        return {"ok": False, "detail": repr(e)}
 
 
 def route(text, sink=None, submit=None):
@@ -432,29 +577,53 @@ class Handler(BaseHTTPRequestHandler):
     def log_message(self, fmt, *args):
         print("%s - %s" % (self.address_string(), fmt % args), flush=True)
 
-    def _send(self, code, body, ctype):
+    def _send(self, code, body, ctype, extra=None):
         if isinstance(body, str):
             body = body.encode("utf-8")
         self.send_response(code)
+        for k, v in (extra or {}).items():
+            self.send_header(k, v)
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(body)))
+        # CORS: local pages on other ports (e.g. the VSAT board on :4321)
+        # POST audio here; loopback-only bind keeps this private anyway.
+        self.send_header("Access-Control-Allow-Origin", "*")
         self.end_headers()
         self.wfile.write(body)
+
+    def do_OPTIONS(self):
+        self.send_response(204)
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type")
+        self.end_headers()
 
     def do_GET(self):
         path = urlparse(self.path).path
         if path in ("/", "/index.html"):
+            # A (re)loaded page wants live speech, not whatever accumulated
+            # while nobody was listening.
+            with _say_lock:
+                _say_queue.clear()
             try:
                 with open(os.path.join(HERE, "index.html"), "rb") as f:
-                    self._send(200, f.read(), "text/html; charset=utf-8")
+                    # Always revalidate: a phone PWA that keeps a stale page
+                    # runs stale trigger/buffer logic against a fixed server.
+                    self._send(200, f.read(), "text/html; charset=utf-8",
+                               extra={"Cache-Control": "no-cache"})
             except OSError as e:
                 self._send(500, str(e), "text/plain")
         elif path == "/say/next":
             with _say_lock:
+                now = time.time()
+                _say_queue[:] = [i for i in _say_queue if now - i["ts"] <= SAY_TTL_S]
                 item = _say_queue.pop(0) if _say_queue else None
                 depth = len(_say_queue)
+            if item:
+                item = dict(item); item.pop("ts", None)
             body = {"text": None, "voice": None, "speaker": None,
-                    "length_scale": None, "depth": depth}
+                    "length_scale": None, "elapsed_ms": None, "kind": None,
+                    "depth": depth}
             if item:
                 body.update(item)
             self._send(200, json.dumps(body), "application/json")
@@ -473,7 +642,7 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         parsed = urlparse(self.path)
         if parsed.path not in ("/transcribe", "/route", "/speak", "/say",
-                               "/commentate"):
+                               "/commentate", "/preview"):
             self._send(404, "not found", "text/plain")
             return
 
@@ -530,7 +699,10 @@ class Handler(BaseHTTPRequestHandler):
                 item = {"text": spoken,
                         "voice": payload.get("voice"),
                         "speaker": payload.get("speaker"),
-                        "length_scale": payload.get("length_scale")}
+                        "length_scale": payload.get("length_scale"),
+                        "elapsed_ms": payload.get("elapsed_ms"),
+                        "kind": payload.get("kind"),
+                        "ts": time.time()}
                 with _say_lock:
                     # Stale speech is worse than dropped speech — keep it shallow.
                     if len(_say_queue) >= MAX_SAY_QUEUE:
@@ -563,9 +735,25 @@ class Handler(BaseHTTPRequestHandler):
                            "application/json")
             return
 
+        if parsed.path == "/preview":
+            # The phone's pending buffer, mirrored as ghost text in Emacs so
+            # the user sees what "rocket" will send. Empty text clears it.
+            try:
+                payload = json.loads(body.decode("utf-8"))
+                self._send(200, json.dumps(preview(payload.get("text", ""),
+                                                   payload.get("sink"))),
+                           "application/json")
+            except Exception as e:
+                self._send(500, json.dumps({"ok": False, "detail": repr(e)}),
+                           "application/json")
+            return
+
         if parsed.path == "/route":
             try:
                 payload = json.loads(body.decode("utf-8"))
+                print("route: sink=%s submit=%s text=%r" % (
+                    payload.get("sink"), payload.get("submit"),
+                    (payload.get("text") or "")[:200]), flush=True)
                 result = route(payload.get("text", ""), payload.get("sink"),
                                payload.get("submit"))
                 self._send(200, json.dumps(result), "application/json")
@@ -580,6 +768,12 @@ class Handler(BaseHTTPRequestHandler):
 
         try:
             result = transcribe(body, model, audio_ctx, greedy)
+            # Journal the text: the page decides trigger/buffering on it, and
+            # leaks are impossible to diagnose from status codes alone.
+            print("transcribe: %s %.1fs %dms ctx=%s clip=%s text=%r" % (
+                result.get("model", model), result.get("audio_sec") or 0, result.get("infer_ms") or 0,
+                result.get("audio_ctx"), result.get("clip"),
+                (result.get("text") or "")[:200]), flush=True)
             self._send(200, json.dumps(result), "application/json")
         except Exception as e:
             self._send(500, json.dumps({"error": repr(e)}), "application/json")
