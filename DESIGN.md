@@ -118,6 +118,42 @@ Piper, already installed, `en_GB-semaine-medium`. Measured on this box:
 
 Full loop: ~0.5 s whisper → agent thinking → ~0.8 s piper. The agent's own latency dominates, which is the right shape — and with no condensation hop there is nothing between the turn ending and speech starting.
 
+## Next: a two-turn split over Agency bellbacks (not built)
+
+The Gist convention (`futon3c/CLAUDE.md`) gives a clean spoken line with no
+extraction heuristics, but it does **not** fix latency: thinking precedes text,
+so a worker's `Gist:` line lands only after its thinking block.
+
+The split: dispatch a cheap gist turn (thinking off, no tools) and bell back the
+real work turn. Then the spoken line is fast *by construction* rather than by
+luck, and — unlike the Opus commentator — it comes from the same agent in the
+same session, so there is nothing to reconcile.
+
+The trade against the commentator is not quality. A no-tools gist turn reasons
+from context exactly as the commentator does, so expect similar content. What
+differs:
+
+| | commentator (built) | bellback split |
+|---|---|---|
+| authority | second model — can diverge | same agent — coherent |
+| cost | API credits | worker quota (Fable) |
+| moving parts | one extra HTTP call | two dispatches per utterance |
+
+So it is better for coherence and worse for quota — which matters while Fable
+sits near its weekly limit.
+
+The async half is *not* a supervision burden: autobellback is the agent
+self-waking when the work lands, which is precisely this shape used as
+intended. The "a bell runs long and opaque" warning in `~/code/CLAUDE.md` is
+about large Codex handoffs where progress cannot be distinguished from wedged —
+a different situation from a fast gist turn followed by a self-resuming work
+turn.
+
+**Measure before building either.** Every spoken line now records time from the
+turn's first streamed token to speech, tagged `gist` or `paragraph`. If a gist
+lands in ~3 s the commentator is redundant and can be deleted along with its
+divergence problem; if it lands at 15 s the split earns its complexity.
+
 ## Open questions
 
 - **Barge-in.** Interrupting mid-speech needs the listener live during playback with echo cancellation. This is what separates "works" from "feels like the app", and it isn't solved by any of the above.
