@@ -22,6 +22,10 @@
 (defvar voxterm-after-insert-hook nil
   "Run in the target buffer after text is inserted, before any submit.")
 
+(defvar voxterm-pinned-buffer-name nil
+  "Buffer explicitly selected as voxterm's dictation target.
+Nil means continue following terminal focus.")
+
 (defun voxterm--submit-here ()
   "Run whatever RET is bound to in the current buffer; return a label.
 Calling the command is deliberate: in `claude-repl-mode' RET is bound to
@@ -37,6 +41,28 @@ synthesising a keypress from a daemon eval."
        (frame-visible-p f)
        (not (frame-parameter f 'voxterm-ignore))))
 
+(defun voxterm--focus-window ()
+  "Return the window selected by voxterm's terminal-focus heuristic."
+  (let ((frame (or (car (filtered-frame-list
+                         (lambda (f) (and (voxterm--usable-frame-p f)
+                                          (eq (ignore-errors (frame-focus-state f)) t)))))
+                   (and (voxterm--usable-frame-p last-event-frame) last-event-frame)
+                   (car (filtered-frame-list #'voxterm--usable-frame-p))
+                   (selected-frame))))
+    (frame-selected-window frame)))
+
+(defun voxterm--pinned-window ()
+  "Return a live window for the pinned buffer, or nil when no pin survives."
+  (when voxterm-pinned-buffer-name
+    (let ((buf (get-buffer voxterm-pinned-buffer-name)))
+      (if (not (buffer-live-p buf))
+          (progn (setq voxterm-pinned-buffer-name nil) nil)
+        (or (get-buffer-window buf t)
+            (let ((win (voxterm--focus-window)))
+              (when (window-live-p win)
+                (set-window-buffer win buf)
+                win)))))))
+
 (defun voxterm--target-window ()
   "The window a dictation should land in: the selected window of the frame
 the user is actually typing in.
@@ -47,25 +73,49 @@ the first of `frame-list' is arbitrary — that once sent dictation meant for
 claude-13 into claude-4.
 
 Order of preference:
-1. the frame whose terminal reports focus (xterm focus tracking: switching
+1. a live explicitly pinned buffer;
+2. the frame whose terminal reports focus (xterm focus tracking: switching
    terminal windows updates this without a keystroke);
-2. `last-event-frame', where the last keystroke happened — the answer when no
+3. `last-event-frame', where the last keystroke happened — the answer when no
    terminal reports focus (emulator without focus events, or all defocused
    because the desktop focus is on a browser);
-3. the first visible frame."
-  (let ((frame (or (car (filtered-frame-list
-                         (lambda (f) (and (voxterm--usable-frame-p f)
-                                          (eq (ignore-errors (frame-focus-state f)) t)))))
-                   (and (voxterm--usable-frame-p last-event-frame) last-event-frame)
-                   (car (filtered-frame-list #'voxterm--usable-frame-p))
-                   (selected-frame))))
-    (frame-selected-window frame)))
+4. the first visible frame.
+
+A killed pinned buffer clears the pin and resumes this focus order."
+  (or (voxterm--pinned-window) (voxterm--focus-window)))
 
 (defun voxterm--writable-p (buf)
   (and (buffer-live-p buf)
        (with-current-buffer buf
          (and (not buffer-read-only)
               (not (minibufferp))))))
+
+;;;###autoload
+(defun voxterm-pin (name)
+  "Pin voxterm dictation to the live buffer named NAME and raise it."
+  (interactive (list (read-buffer "Pin voxterm to buffer: " (buffer-name) t)))
+  (let ((buf (get-buffer name)))
+    (unless (buffer-live-p buf)
+      (user-error "No live buffer named %s" name))
+    (setq voxterm-pinned-buffer-name (buffer-name buf))
+    (let ((win (voxterm--pinned-window)))
+      (unless (window-live-p win)
+        (setq voxterm-pinned-buffer-name nil)
+        (user-error "Could not display buffer %s" name))
+      (select-window win)
+      (buffer-name (window-buffer win)))))
+
+;;;###autoload
+(defun voxterm-unpin ()
+  "Clear the explicit voxterm target and resume following focus."
+  (interactive)
+  (setq voxterm-pinned-buffer-name nil)
+  (voxterm-target-name))
+
+;;;###autoload
+(defun voxterm-target-pinned-p ()
+  "Return non-nil when voxterm currently has a live explicit target pin."
+  (and (voxterm--pinned-window) t))
 
 ;;;###autoload
 (defun voxterm-target-name ()
