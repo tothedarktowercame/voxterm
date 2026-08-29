@@ -20,6 +20,7 @@ import time
 import wave
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
+from urllib.request import urlopen
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 WHISPER = os.path.expanduser("~/tools/whisper/whisper-cli")
@@ -627,6 +628,28 @@ class Handler(BaseHTTPRequestHandler):
             if item:
                 body.update(item)
             self._send(200, json.dumps(body), "application/json")
+        elif path == "/agency/jobs":
+            try:
+                with urlopen("http://127.0.0.1:7070/api/alpha/invoke/jobs",
+                             timeout=2.5) as response:
+                    payload = json.load(response)
+                jobs = []
+                for job in payload.get("jobs", []):
+                    summary = str(job.get("result-summary") or "")
+                    if len(summary) > 120:
+                        summary = summary[:117] + "..."
+                    jobs.append({key: job.get(key) for key in
+                                 ("agent-id", "caller", "state", "started-at",
+                                  "finished-at")}
+                                | {"result-summary": summary})
+                jobs.sort(key=lambda job: (job.get("started-at") or ""),
+                          reverse=True)
+                self._send(200, json.dumps({"ok": True, "jobs": jobs}),
+                           "application/json")
+            except Exception as e:
+                self._send(200, json.dumps({"ok": False, "error": str(e),
+                                            "jobs": []}),
+                           "application/json")
         elif path == "/health":
             ok = os.path.exists(WHISPER)
             models = {k: os.path.exists(v) for k, v in MODELS.items()}

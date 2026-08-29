@@ -108,6 +108,13 @@
   .ent.fired { border-color: var(--rocket); } .ent.fired .t { color: #ffd489; }
   .ent.agent { border-color: #2f5d7a; } .ent.agent .t { color: #a8d0ea; }
   .ent.instant { border-color: #4a3d7a; } .ent.instant .t { color: #c4b5ff; }
+  #agencyJobs { display: flex; flex-direction: column; gap: 8px; margin-bottom: 18px; }
+  #agencyJobs:empty::before { content: "agency unavailable"; color: var(--dim); font-style: italic; }
+  .ent.job.running { border-color: var(--ok); background: #14231d; }
+  .ent.job.failed { border-color: var(--live); }
+  .ent.job .state { float: right; color: var(--dim); font-size: 11.5px; text-transform: uppercase; }
+  .ent.job.running .state { color: var(--ok); }
+  .ent.job.failed .state { color: var(--live); }
   #status { font-size: 12.5px; color: var(--dim); min-height: 18px; margin-bottom: 4px; }
 </style>
 </head>
@@ -178,6 +185,9 @@
     <button id="recal">Recalibrate</button>
   </div>
 
+  <h2>Who is invoking</h2>
+  <div id="agencyJobs"></div>
+
   <h2>Segments</h2>
   <div id="log"></div>
 </main>
@@ -188,6 +198,7 @@ const talk = $('#talk'), tLabel = $('#talkLabel'), tHint = $('#talkHint');
 const rocket = $('#rocket'), rLabel = $('#rocketLabel'), listen = $('#listen');
 const meter = $('#meter'), meterWrap = $('#meterWrap'), threshEl = $('#thresh'), meterLabel = $('#meterLabel');
 const pending = $('#pending'), statusEl = $('#status'), out = $('#out'), log = $('#log');
+const agencyJobs = $('#agencyJobs');
 
 const RATE = 16000;
 const FRAME = 1024;                 // 64 ms at 16 kHz
@@ -309,6 +320,40 @@ async function drainSay() {
   } catch (err) { /* server down or page offline — stay silent */ }
 }
 setInterval(drainSay, 1200);
+
+function renderAgencyJobs(jobs) {
+  agencyJobs.replaceChildren();
+  const ordered = [...jobs].sort((a, b) => {
+    const running = Number(b.state === 'running') - Number(a.state === 'running');
+    return running || String(b['started-at'] || '').localeCompare(String(a['started-at'] || ''));
+  });
+  for (const job of ordered.slice(0, 20)) {
+    const ent = document.createElement('div');
+    ent.className = 'ent job ' + (job.state || '');
+    const title = document.createElement('div');
+    title.className = 't';
+    const state = document.createElement('span');
+    state.className = 'state';
+    state.textContent = job.state || 'unknown';
+    title.textContent = job['agent-id'] || 'unknown agent';
+    title.appendChild(state);
+    const meta = document.createElement('div');
+    meta.className = 'm';
+    meta.textContent = [job.caller, job['started-at'], job['result-summary']]
+      .filter(Boolean).join(' · ');
+    ent.append(title, meta);
+    agencyJobs.appendChild(ent);
+  }
+}
+
+function refreshAgencyJobs() {
+  fetch('agency/jobs', { cache: 'no-store' })
+    .then(response => response.json())
+    .then(data => renderAgencyJobs(data.jobs || []))
+    .catch(() => renderAgencyJobs([]));
+}
+refreshAgencyJobs();
+setInterval(refreshAgencyJobs, 7000);
 
 const setStatus = t => statusEl.textContent = t;
 
