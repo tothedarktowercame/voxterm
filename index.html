@@ -215,6 +215,7 @@ let pendingAt = 0;
 const MIN_SPEECH_FRAMES = 5;        // ~320 ms above threshold, else it was a click/cough, not speech
 let speechFrames = 0;
 const MAX_SEG_SEC = 20;
+const MAX_PTT_SEC = 20;             // a lost release must not record indefinitely
 
 // "rocket" as whisper actually renders it — including the homophone.
 const TRIGGER = /\b(?:rocket+s?|rock\s?it|rock\s?et|rocked|rockit)\b/gi;
@@ -236,11 +237,11 @@ function findTrigger(text) {
 }
 // whisper's stock hallucinations on near-silence — a fixed, well-known list, not a
 // guess about words. Everything else is judged structurally (see below).
-const JUNK = /^(?:thank you\.?|thanks for watching!?|you|bye\.?|\.|,)$/i;
+const JUNK = /^(?:thank you\.?|thanks for watching!?|you(?:[\s.,!?]+you)*[.!?]?|bye\.?|\.|,)$/i;
 
 let ctx = null, node = null, inRate = RATE;
 let mode = 'ptt';                   // 'ptt' | 'always'
-let pttRec = false, busy = false;
+let pttRec = false, pttRequested = false, pttStopTimer = null, busy = false;
 let pttChunks = [];
 let ring = [], segFrames = [], vad = 'silence', above = 0, below = 0;
 let noiseFloor = 0.004, threshold = 0.014, lastRms = 0, calibrating = 0, calAcc = [];
@@ -516,10 +517,14 @@ function handle(r, roundTrip, fromVad) {
                .concat(r.stutter_trimmed ? ['<b>stutter trimmed</b>'] : []).join(' · ');
 
   if (!fromVad) {
-    addEntry(text || '(silence)', meta, '');
+    if (!text || JUNK.test(text)) {
+      addEntry(text || '(silence)', meta + ' · dropped', '');
+      setStatus('nothing heard — not sent');
+      return;
+    }
+    addEntry(text, meta, '');
     // Push-to-talk routes each utterance straight through; there is no buffer to hold.
-    if (text) dispatch(text);
-    else setStatus('last: ' + r.infer_ms + ' ms — nothing heard');
+    dispatch(text);
     return;
   }
 
@@ -621,6 +626,7 @@ function addEntry(text, meta, cls) {
 // --- mode switching ---
 async function setMode(next) {
   if (next === 'always') {
+    if (pttRequested || pttRec) await stopPtt();
     if (!(await initAudio())) return;
     if (ctx.state === 'suspended') await ctx.resume();
     mode = 'always';
@@ -661,12 +667,24 @@ document.addEventListener('visibilitychange', async () => {
 // --- push to talk (disabled while always-listening) ---
 async function startPtt() {
   if (mode !== 'ptt' || busy || pttRec) return;
-  if (!(await initAudio())) return;
+  // Record the press before awaiting microphone setup. On first use the permission
+  // prompt can outlive the press; without this latch, its eventual resolution starts
+  // a recording after pointerup has already been lost.
+  pttRequested = true;
+  if (!(await initAudio())) { pttRequested = false; return; }
+  if (!pttRequested || mode !== 'ptt' || busy) return;
   if (ctx.state === 'suspended') await ctx.resume();
+  if (!pttRequested || mode !== 'ptt' || busy) return;
   pttChunks = []; pttRec = true;
+  clearTimeout(pttStopTimer);
+  pttStopTimer = setTimeout(() => {
+    if (pttRec) stopPtt();
+  }, MAX_PTT_SEC * 1000);
   talk.classList.add('live'); tLabel.textContent = 'Listening…'; tHint.textContent = 'release to transcribe';
 }
 async function stopPtt() {
+  pttRequested = false;
+  clearTimeout(pttStopTimer); pttStopTimer = null;
   if (!pttRec) return;
   pttRec = false; talk.classList.remove('live');
   const samples = resample(flatten(pttChunks), inRate, RATE); pttChunks = [];
@@ -677,10 +695,20 @@ async function stopPtt() {
   await send(samples, false);
 }
 
-talk.addEventListener('pointerdown', e => { e.preventDefault(); startPtt(); });
+talk.addEventListener('pointerdown', e => {
+  e.preventDefault();
+  try { talk.setPointerCapture(e.pointerId); } catch (_) {}
+  startPtt();
+});
 talk.addEventListener('pointerup', e => { e.preventDefault(); stopPtt(); });
 talk.addEventListener('pointercancel', () => stopPtt());
 talk.addEventListener('pointerleave', () => { if (pttRec) stopPtt(); });
+addEventListener('pointerup', () => { if (pttRequested || pttRec) stopPtt(); });
+addEventListener('pointercancel', () => { if (pttRequested || pttRec) stopPtt(); });
+addEventListener('blur', () => { if (pttRequested || pttRec) stopPtt(); });
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'hidden' && (pttRequested || pttRec)) stopPtt();
+});
 talk.addEventListener('contextmenu', e => e.preventDefault());
 addEventListener('keydown', e => {
   if (e.code === 'Space' && !e.repeat && mode === 'ptt' && e.target.tagName !== 'SELECT') { e.preventDefault(); startPtt(); }
