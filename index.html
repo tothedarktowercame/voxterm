@@ -607,28 +607,39 @@ function renderProcs(data) {
   // An agent's ROOT process is its seat, and a seat outlives its turns: claude-20's
   // `claude --print` had been alive 4h25m while the roster said idle, and printing
   // that age the way a job's elapsed time is printed read as "executing for four
-  // hours" with no chip to match (Joe, 2026-09-01). So: invoking seats first, with
-  // their activity and what runs beneath; idle seats after, one dim line each,
-  // labelled as idle with the seat's age called uptime, and no tree (there is none).
+  // hours" with no chip to match (Joe, 2026-09-01). Worse, "claude-7 invoking for
+  // 45 minutes" was never a turn -- it was the seat process's AGE; a seat is a
+  // persistent sleeping `claude --print`, one per registered seat, and its age is
+  // uptime, never invocation duration (claude-7, 2026-09-04). Liveness is the
+  // chips' job (live job + time since its last event). This panel is inventory:
+  // seats that currently have child processes, with the seat's age labelled
+  // uptime; a sleeping seat has no children and gets no line.
   const rows = (data.agents || []).slice();
-  const busy = r => r.status === 'invoking' || (r.tree.children || []).length > 0;
+  const busy = r => (r.tree.children || []).length > 0;
   rows.sort((a, b) => (busy(b) ? 1 : 0) - (busy(a) ? 1 : 0));
   for (const row of rows) {
     if (busy(row)) {
       const act = row.activity ? ' \u2014 ' + esc(row.activity) : '';
       out.push('<span class="who">' + esc(row.id) + '</span> \u00b7 ' + esc(row.tree.cmd)
-               + ' \u00b7 invoking ' + fmtElapsed(row.elapsed) + act);
+               + ' \u00b7 seat up ' + fmtElapsed(row.elapsed) + act);
       renderTree(row.tree, 0, out);
     }
     // Idle seats are not listed: a seat's uptime is not work, and a line for it
     // reads as a job to wait on (Joe, 2026-09-01). The chips already say who is
-    // invoking; this panel says only what the invoking ones are running.
+    // working; this panel says only what the working ones are running.
   }
   for (const tree of data.unmatched || []) {
     // A JVM child no agent's invoke start explains: shown, not hidden, because
     // an unexplained process is the kind of thing this panel exists to surface.
+    // If its start time matches a job's creation (done jobs included -- a seat
+    // persists after its job finishes), name the likely owner and say plainly
+    // that the seat is idle, so "? claude seat" never reads as something
+    // running (claude-10's seat, 2026-09-04).
     const sid = tree.session ? ' \u00b7 session ' + esc(String(tree.session).slice(0, 8)) : ' \u00b7 no session id';
-    out.push('<span class="who">?</span> \u00b7 ' + esc(tree.cmd) + ' \u00b7 ' + fmtElapsed(tree.elapsed) + sid);
+    const who = tree['likely-agent']
+      ? '<span class="who">' + esc(tree['likely-agent']) + '</span> (seat) \u00b7 idle \u00b7 '
+      : '<span class="who">?</span> \u00b7 ';
+    out.push(who + esc(tree.cmd) + ' \u00b7 up ' + fmtElapsed(tree.elapsed) + sid);
     renderTree(tree, 0, out);
   }
   procs.innerHTML = out.join('\n');

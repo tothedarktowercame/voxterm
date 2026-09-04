@@ -1077,6 +1077,35 @@ def agency_procs():
         pass
     sole_role = next(iter(role_agents)) if len(role_agents) == 1 else None
 
+    # Attribution for unmatched JVM children: a seat process persists long
+    # after its job finished (claude-10's seat, 2026-09-04: started exactly
+    # when its 5-second job began, idle ever since), so correlate each
+    # unmatched child's start against EVERY job's creation time -- done jobs
+    # included -- and against invoke-started-at stamps. This claims likely
+    # ownership without consuming the `used` set: it names the seat, it does
+    # not assert a running turn.
+    attr_candidates = []
+    try:
+        with urlopen("http://127.0.0.1:7070/api/alpha/invoke/jobs",
+                     timeout=2.5) as r:
+            for job in (json.load(r).get("jobs") or []):
+                t = epoch(job.get("created-at"))
+                if t and job.get("agent-id"):
+                    attr_candidates.append((t, job["agent-id"]))
+    except Exception:
+        pass
+    for t, ident in starts:
+        if (t, ident) not in attr_candidates:
+            attr_candidates.append((t, ident))
+
+    def likely_owner(child_start):
+        best = None
+        for t, cand in attr_candidates:
+            d = child_start - t
+            if -5 <= d <= 20 and (best is None or abs(d) < best[0]):
+                best = (abs(d), cand)
+        return best[1] if best else None
+
     rows, unmatched, used = [], [], set()
     # The unattended build loop (futon2 wm-build-loop.sh) runs OUTSIDE the
     # Agency JVM -- a bash loop under nohup that spawns `claude -p` / `codex
@@ -1090,7 +1119,7 @@ def agency_procs():
         if procs[pid]["ppid"] in loop_pids and \
            procs[procs[pid]["ppid"]]["cmd"] == procs[pid]["cmd"]:
             continue
-        rows.append({"id": procs[pid]["cmd"][:-3], "status": "invoking",
+        rows.append({"id": procs[pid]["cmd"][:-3], "status": "loop",
                      "activity": "building from the ledger",
                      "matched-by": "cmdline", "pid": pid,
                      "elapsed": procs[pid]["elapsed"], "tree": subtree(pid, 0, [16])})
@@ -1134,11 +1163,21 @@ def agency_procs():
             if how != "sole-role-job":
                 used.add(ident)
             status, act = info.get(ident, (None, None))
-            rows.append({"id": ident, "status": status, "activity": act,
+            # A seat's age is UPTIME, not an invocation duration: one
+            # persistent `claude --print` per registered seat is the design,
+            # it sleeps between turns (claude-10's seat started the second
+            # its 5s job began, then state S for hours), and the roster
+            # `status` riding this row is the same intent-not-liveness flag
+            # the chips no longer trust (2026-09-04). The row reports the
+            # seat; whether anything is RUNNING is what its child processes
+            # say (the tree), and any activity shown is the seat's last
+            # reported one, not proof of a running turn.
+            rows.append({"id": ident, "status": "seat", "activity": act,
                          "matched-by": how, "pid": child,
                          "elapsed": c["elapsed"], "tree": tree})
         else:
             tree["session"] = sid
+            tree["likely-agent"] = likely_owner(c["start"])
             unmatched.append(tree)
     return {"ok": True, "jvm": jvm, "agents": rows, "unmatched": unmatched}
 
