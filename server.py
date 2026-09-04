@@ -1077,14 +1077,28 @@ def agency_procs():
         pass
     sole_role = next(iter(role_agents)) if len(role_agents) == 1 else None
 
-    # Attribution for unmatched JVM children: a seat process persists long
-    # after its job finished (claude-10's seat, 2026-09-04: started exactly
-    # when its 5-second job began, idle ever since), so correlate each
-    # unmatched child's start against EVERY job's creation time -- done jobs
-    # included -- and against invoke-started-at stamps. This claims likely
-    # ownership without consuming the `used` set: it names the seat, it does
-    # not assert a running turn.
+    # Attribution for unmatched JVM children. A seat process persists long
+    # after its job finished, so job created-at correlation decays as soon as
+    # that job ages out of the endpoint's rolling 20-job window (claude-10's
+    # seat, 2026-09-04: attributable at rehearsal, "?" again 30 minutes
+    # later). The durable key is the REGISTRY: an agent's `registered-at` is
+    # stamped once, never expires, and the seat process starts within seconds
+    # of it. Job created-at and invoke-started-at stay as additional
+    # candidates; this claims likely ownership without consuming the `used`
+    # set -- it names the seat, it does not assert a running turn. (Claude
+    # seats carry no session id in argv -- it arrives over stdin -- and
+    # /proc/<pid>/environ, checked 2026-09-04, holds no UUID either.)
     attr_candidates = []
+    try:
+        with urlopen("http://127.0.0.1:7070/api/alpha/agents",
+                     timeout=2.5) as r:
+            for agent in (json.load(r).get("agents") or {}).values():
+                t = epoch(agent.get("registered-at"))
+                ident = (agent.get("id") or {}).get("id/value")
+                if t and ident:
+                    attr_candidates.append((t, ident))
+    except Exception:
+        pass
     try:
         with urlopen("http://127.0.0.1:7070/api/alpha/invoke/jobs",
                      timeout=2.5) as r:

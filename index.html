@@ -629,17 +629,17 @@ function renderProcs(data) {
     // working; this panel says only what the working ones are running.
   }
   for (const tree of data.unmatched || []) {
-    // A JVM child no agent's invoke start explains: shown, not hidden, because
-    // an unexplained process is the kind of thing this panel exists to surface.
-    // If its start time matches a job's creation (done jobs included -- a seat
-    // persists after its job finishes), name the likely owner and say plainly
-    // that the seat is idle, so "? claude seat" never reads as something
-    // running (claude-10's seat, 2026-09-04).
+    // A JVM child no candidate explains. Its parentage (the agency JVM) already
+    // proves it is one of ours, so never render a bare "?" -- that reads as an
+    // intruder (Joe, 2026-09-04: "Who summoned this Claude seat with no session
+    // ID into existence?"). Say what it is, and what it is running if anything.
     const sid = tree.session ? ' \u00b7 session ' + esc(String(tree.session).slice(0, 8)) : ' \u00b7 no session id';
+    const kids = tree.children || [];
+    const running = kids.length ? ' \u00b7 <span class="hot">running ' + esc(kids[0].cmd) + '</span>' : ' \u00b7 idle';
     const who = tree['likely-agent']
-      ? '<span class="who">' + esc(tree['likely-agent']) + '</span> (seat) \u00b7 idle \u00b7 '
-      : '<span class="who">?</span> \u00b7 ';
-    out.push(who + esc(tree.cmd) + ' \u00b7 up ' + fmtElapsed(tree.elapsed) + sid);
+      ? '<span class="who">' + esc(tree['likely-agent']) + '</span> (seat)'
+      : '<span class="who">unattributed seat</span> (agency JVM child)';
+    out.push(who + ' \u00b7 ' + esc(tree.cmd) + ' \u00b7 up ' + fmtElapsed(tree.elapsed) + sid + running);
     renderTree(tree, 0, out);
   }
   procs.innerHTML = out.join('\n');
