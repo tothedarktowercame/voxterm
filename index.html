@@ -108,13 +108,45 @@
   .ent.fired { border-color: var(--rocket); } .ent.fired .t { color: #ffd489; }
   .ent.agent { border-color: #2f5d7a; } .ent.agent .t { color: #a8d0ea; }
   .ent.instant { border-color: #4a3d7a; } .ent.instant .t { color: #c4b5ff; }
-  #agencyJobs { display: flex; flex-direction: column; gap: 8px; margin-bottom: 18px; }
-  #agencyJobs:empty::before { content: "agency unavailable"; color: var(--dim); font-style: italic; }
-  .ent.job.running { border-color: var(--ok); background: #14231d; }
-  .ent.job.failed { border-color: var(--live); }
-  .ent.job .state { float: right; color: var(--dim); font-size: 11.5px; text-transform: uppercase; }
-  .ent.job.running .state { color: var(--ok); }
-  .ent.job.failed .state { color: var(--live); }
+  /* A single wrapping row at the very top: who is worth talking to right now.
+     Deliberately not a log -- finished work lives in the Agency's own views, and
+     twenty cards here buried the two lines that actually answer the question. */
+  #agents { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 10px; }
+  #procs { font-family: ui-monospace, Menlo, monospace; font-size: 11.5px; color: var(--dim);
+           margin: -4px 0 10px; line-height: 1.35; white-space: pre; overflow-x: auto; }
+  #procs .who { color: var(--fg); }
+  #procs .hot { color: var(--accent, #d48700); }
+  #procs .idle { opacity: 0.55; }
+  #agents:empty::before { content: "nothing invoking"; color: var(--dim); font-style: italic; font-size: 12.5px; }
+  .ag { border: 1px solid var(--line); background: var(--panel); border-radius: 999px;
+        min-height: 44px; padding: 8px 14px; white-space: nowrap; color: var(--dim);
+        font: 12.5px ui-monospace, Menlo, monospace; cursor: pointer;
+        touch-action: manipulation; }
+  .ag:active { transform: scale(.97); }
+  .ag:disabled { opacity: .6; cursor: wait; }
+  .ag.invoking { border-color: var(--ok); background: #14231d; color: #cfe9d8; }
+  /* Live job but silent > 10m: still green-border working, but the label says
+     "quiet" and the border warms, because a long turn and a hung turn must not
+     render the same (Joe, 2026-09-01: "a chip that has read invoking for
+     eleven minutes"). */
+  .ag.invoking.quiet { border-color: var(--live); }
+  /* After .invoking on purpose: where dictation will actually land outranks who
+     happens to be busy, and the agent holding the cursor is usually both. */
+  .ag.target { border-color: #6b5bb5; background: #221c3a; color: #c4b5ff; }
+  .ag.pinned { border-color: #9b83ff; box-shadow: inset 0 0 0 1px #9b83ff;
+               background: #2b214a; color: #ded6ff; }
+  .ag.new { border-style: dashed; border-color: var(--accent); background: transparent;
+            color: #9fc5ff; font-weight: 700; }
+  .ag.new:disabled { border-color: var(--line); color: var(--dim); }
+  #newKinds { display: none; flex-wrap: wrap; align-items: center; gap: 6px;
+              margin: -4px 0 10px; }
+  #newKinds.open { display: flex; }
+  .new-kind { min-height: 44px; padding: 8px 14px; border: 1px solid #4b5f7d;
+              border-radius: 999px; background: #172132; color: #b9d4ff;
+              font: 12.5px ui-monospace, Menlo, monospace; cursor: pointer;
+              touch-action: manipulation; }
+  .new-kind:disabled { opacity: .55; cursor: wait; }
+  .ag .st { font-size: 11px; margin-left: 6px; opacity: .75; }
   #status { font-size: 12.5px; color: var(--dim); min-height: 18px; margin-bottom: 4px; }
 </style>
 </head>
@@ -125,6 +157,9 @@
 </header>
 
 <main>
+  <div id="agents"></div>
+  <div id="procs"></div>
+  <div id="newKinds" aria-label="create agent"></div>
   <div id="status">tap the button once to grant mic access</div>
 
   <button id="rocket"><span class="em">&#128640;</span><span id="rocketLabel">Always listening — off</span></button>
@@ -185,9 +220,6 @@
     <button id="recal">Recalibrate</button>
   </div>
 
-  <h2>Who is invoking</h2>
-  <div id="agencyJobs"></div>
-
   <h2>Segments</h2>
   <div id="log"></div>
 </main>
@@ -198,7 +230,7 @@ const talk = $('#talk'), tLabel = $('#talkLabel'), tHint = $('#talkHint');
 const rocket = $('#rocket'), rLabel = $('#rocketLabel'), listen = $('#listen');
 const meter = $('#meter'), meterWrap = $('#meterWrap'), threshEl = $('#thresh'), meterLabel = $('#meterLabel');
 const pending = $('#pending'), statusEl = $('#status'), out = $('#out'), log = $('#log');
-const agencyJobs = $('#agencyJobs');
+const agents = $('#agents'), newKinds = $('#newKinds');
 
 const RATE = 16000;
 const FRAME = 1024;                 // 64 ms at 16 kHz
@@ -209,10 +241,21 @@ const MIN_SEG_SEC = 0.35;
 // A short pending buffer that is neither continued nor sent within this long is
 // noise (typing came through as "Q Alm Tm Tuk") — retract it. Only short ones:
 // a real dictation that pauses to think must not be thrown away.
-const PENDING_IDLE_MS = 12000;
-const PENDING_RETRACT_MAX_WORDS = 6;
+// The first thresholds did throw it away: 6 words is a whole opening sentence and
+// 12 s is an ordinary pause for thought, so "So firstly, I'm trying it again." was
+// binned mid-compose (2026-08-29). Noise is a handful of junk tokens and is in no
+// hurry to be collected, so wait much longer and only for shorter buffers.
+const PENDING_IDLE_MS = 45000;
+const PENDING_RETRACT_MAX_WORDS = 4;
 let pendingAt = 0;
 const MIN_SPEECH_FRAMES = 5;        // ~320 ms above threshold, else it was a click/cough, not speech
+// ...but with text already buffered, a short burst is far more likely to be "rocket"
+// than a cough, and "rocket" is both the shortest thing you ever say and the one word
+// that must never be missed -- dropping it strands the buffer with no way to send
+// (2026-08-29: brisk "rocket"s logged as noise bursts, never POSTed at all). Coughing
+// into a live buffer now costs a junk word you can see and retract, which is cheaper
+// than a trigger that silently does nothing.
+const MIN_SPEECH_FRAMES_PENDING = 3;   // ~190 ms, used only when something is waiting to send
 let speechFrames = 0;
 const MAX_SEG_SEC = 20;
 const MAX_PTT_SEC = 20;             // a lost release must not record indefinitely
@@ -220,19 +263,20 @@ const MAX_PTT_SEC = 20;             // a lost release must not record indefinite
 // "rocket" as whisper actually renders it — including the homophone.
 const TRIGGER = /\b(?:rocket+s?|rock\s?it|rock\s?et|rocked|rockit)\b/gi;
 
-// The keyword means "send", so it lands at the END of an utterance. Requiring that
-// keeps "the rocket ship launched" and "I rocked up late" from firing. One trailing
-// word is tolerated for a stray token.
-// Keyword(s) at the very end of a string, with surrounding punctuation.
+// The keyword means "send" and fires wherever it is heard: what precedes it is the
+// payload, what follows opens the next buffer. It used to fire only at the end of an
+// utterance, which kept "the rocket ship launched" from sending -- but it also
+// silently ate the last word of any sentence that ended with the keyword as content
+// ("...go into Emacs when I press rocket" sent "...when I press", 2026-08-29), and it
+// dropped the trigger altogether whenever speech ran on past it. Firing on every
+// mention is the tradeoff: narrow TRIGGER, not this, if a phrase misfires.
+// TRAILING_TRIGGER still strips repeated keywords off the tail of the payload.
 const TRAILING_TRIGGER = /(?:[\s.,!?;:]*\b(?:rocket+s?|rock\s?it|rock\s?et|rocked|rockit)\b[\s.,!?;:]*)+$/i;
 
 function findTrigger(text) {
   let m, last = null;
   TRIGGER.lastIndex = 0;
   while ((m = TRIGGER.exec(text)) !== null) last = m;
-  if (!last) return null;
-  const tail = text.slice(last.index + last[0].length).replace(/^[\s.,!?;:]+/, '').trim();
-  if (tail && tail.split(/\s+/).length > 1) return null;
   return last;
 }
 // whisper's stock hallucinations on near-silence — a fixed, well-known list, not a
@@ -244,6 +288,12 @@ let mode = 'ptt';                   // 'ptt' | 'always'
 let pttRec = false, pttRequested = false, pttStopTimer = null, busy = false;
 let pttChunks = [];
 let ring = [], segFrames = [], vad = 'silence', above = 0, below = 0;
+// Frames captured since the last segment closed. The preroll ring is not emptied
+// at a close, so a segment cut mid-sentence by MAX_SEG_SEC leaves its own last
+// ~380 ms sitting in the ring; the segment that opens a moment later would send
+// that audio a second time and whisper would transcribe the word twice, once on
+// each side of the seam. Only preroll that arrived after the close is new audio.
+let framesSinceClose = Infinity;
 let noiseFloor = 0.004, threshold = 0.014, lastRms = 0, calibrating = 0, calAcc = [];
 let queue = [], draining = false, wakeLock = null, speaking = false;
 let speakBusy = false;              // held from speakText entry, so overlapping polls can't stack playback
@@ -322,39 +372,275 @@ async function drainSay() {
 }
 setInterval(drainSay, 1200);
 
-function renderAgencyJobs(jobs) {
-  agencyJobs.replaceChildren();
-  const ordered = [...jobs].sort((a, b) => {
-    const running = Number(b.state === 'running') - Number(a.state === 'running');
-    return running || String(b['started-at'] || '').localeCompare(String(a['started-at'] || ''));
-  });
-  for (const job of ordered.slice(0, 20)) {
-    const ent = document.createElement('div');
-    ent.className = 'ent job ' + (job.state || '');
-    const title = document.createElement('div');
-    title.className = 't';
-    const state = document.createElement('span');
-    state.className = 'state';
-    state.textContent = job.state || 'unknown';
-    title.textContent = job['agent-id'] || 'unknown agent';
-    title.appendChild(state);
-    const meta = document.createElement('div');
-    meta.className = 'm';
-    meta.textContent = [job.caller, job['started-at'], job['result-summary']]
-      .filter(Boolean).join(' · ');
-    ent.append(title, meta);
-    agencyJobs.appendChild(ent);
+// A chip cycles through three states rather than pinning on the first tap.
+// Pinning is the strong claim -- the buffer follows you into every frame you
+// look at -- and it is not what "I am talking to this one now" usually means:
+// that is just moving the cursor, which redirects dictation on its own because
+// an unpinned voxterm follows focus. So: tap once for the cursor, again to make
+// it stick, a third time to let go.
+async function chooseAgent(agent, mode, button) {
+  button.disabled = true;
+  try {
+    const response = await fetch('target', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ agent, mode })
+    });
+    const result = await response.json();
+    if (!result.ok) setStatus('target unchanged: ' + (result.reason || 'failed'));
+    else if (!agent) setStatus('dictation follows Emacs focus');
+    else if (mode === 'focus') setStatus('cursor moved to ' + agent + ' — tap again to pin');
+    else setStatus('dictation pinned to ' + agent);
+  } catch (err) {
+    setStatus('target unchanged: ' + err.message);
+  } finally {
+    refreshAgents();
   }
 }
 
-function refreshAgencyJobs() {
-  fetch('agency/jobs', { cache: 'no-store' })
-    .then(response => response.json())
-    .then(data => renderAgencyJobs(data.jobs || []))
-    .catch(() => renderAgencyJobs([]));
+let creatingAgent = false;
+let runtimeChoices = null;
+
+function choiceButton(label, action) {
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = 'new-kind';
+  button.textContent = label;
+  button.addEventListener('click', action);
+  return button;
 }
-refreshAgencyJobs();
-setInterval(refreshAgencyJobs, 7000);
+
+function closeCreateChoices() {
+  newKinds.classList.remove('open');
+  newKinds.replaceChildren();
+}
+
+function showRuntimeChoices() {
+  newKinds.replaceChildren();
+  for (const runtime of runtimeChoices || []) {
+    newKinds.appendChild(choiceButton(runtime.label, () => showModelChoices(runtime)));
+  }
+  newKinds.appendChild(choiceButton('cancel', closeCreateChoices));
+  newKinds.classList.add('open');
+}
+
+function showModelChoices(runtime) {
+  if (!runtime.models.length) {
+    setStatus('no models configured for ' + runtime.label);
+    return;
+  }
+  if (runtime.models.length === 1) {
+    createAgent(runtime.type, runtime.models[0]);
+    return;
+  }
+  newKinds.replaceChildren();
+  newKinds.appendChild(choiceButton('← runtimes', showRuntimeChoices));
+  for (const model of runtime.models) {
+    newKinds.appendChild(choiceButton(model, () => createAgent(runtime.type, model)));
+  }
+  newKinds.classList.add('open');
+}
+
+async function openCreateChoices() {
+  if (creatingAgent) return;
+  if (!runtimeChoices) {
+    try {
+      const response = await fetch('agency/runtimes', { cache: 'no-store' });
+      const result = await response.json();
+      if (!result.ok) throw new Error(result.reason || 'runtime discovery failed');
+      runtimeChoices = result.runtimes || [];
+    } catch (err) {
+      setStatus('new agent unavailable: ' + err.message);
+      return;
+    }
+  }
+  showRuntimeChoices();
+}
+
+async function createAgent(runtime, model) {
+  if (creatingAgent) return;
+  creatingAgent = true;
+  const add = agents.querySelector('.ag.new');
+  if (add) add.disabled = true;
+  setStatus('creating ' + runtime + ' agent…');
+  for (const choice of newKinds.querySelectorAll('button')) choice.disabled = true;
+  try {
+    const response = await fetch('agency/new', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ type: runtime, model })
+    });
+    const result = await response.json();
+    if (!result.ok) {
+      const step = result.step ? result.step + ': ' : '';
+      setStatus('new agent failed at ' + step + (result.reason || 'unknown failure'));
+    } else {
+      setStatus('created ' + result.agent + ' on ' + result.model + ' and pinned it');
+      closeCreateChoices();
+    }
+  } catch (err) {
+    setStatus('new agent failed: ' + err.message);
+  } finally {
+    creatingAgent = false;
+    for (const choice of newKinds.querySelectorAll('button')) choice.disabled = false;
+    await refreshAgents();
+  }
+}
+
+function fmtQuiet(sec) {
+  if (sec == null) return '';
+  if (sec < 60) return Math.max(1, Math.round(sec)) + 's';
+  if (sec < 3600) return Math.round(sec / 60) + 'm';
+  const h = Math.floor(sec / 3600), m = Math.round((sec % 3600) / 60);
+  return h + 'h' + (m ? String(m).padStart(2, '0') + 'm' : '');
+}
+
+function renderAgents(rows, target) {
+  agents.replaceChildren();
+  const here = target && target.agent;
+  for (const row of rows) {
+    const el = document.createElement('button');
+    el.type = 'button';
+    const isTarget = here && row.id === here;
+    const isPinned = isTarget && target.pinned;
+    // Liveness came from the job feed, not the roster's `status` flag (which
+    // latches "invoking" forever). "quiet" means the job is live but its last
+    // event is old -- the state worth attention, invisible before.
+    const invoking = row.status === 'invoking';
+    const quietSec = row['quiet-sec'];
+    const quiet = invoking && quietSec != null && quietSec > 600;
+    el.className = 'ag' + (invoking ? ' invoking' : '')
+                        + (quiet ? ' quiet' : '')
+                        + (isTarget ? ' target' : '')
+                        + (isPinned ? ' pinned' : '');
+    el.textContent = row.id;
+    // Only label what the colour cannot say. Grey already means "was working
+    // recently", so spelling it out costs a word and adds nothing; pinned and
+    // cursor-here are states you cannot infer from a swatch, so they keep theirs.
+    // What runtime you are about to talk to, when the id does not say it: the
+    // model for a Claude seat (claude-11 could be any of three, at three prices),
+    // the type for codex and zai, nothing for a seat registered before models
+    // were selectable.
+    const runtime = row.model || (row.type && row.type !== 'claude' ? row.type : '');
+    const state = isPinned ? '\u{1F4CC} pinned'
+                : isTarget ? 'cursor here'
+                : invoking ? (quietSec == null ? 'invoking'
+                              : quietSec <= 600 ? 'invoking \u00b7 ' + fmtQuiet(quietSec)
+                              : 'invoking \u00b7 quiet ' + fmtQuiet(quietSec))
+                : '';
+    const label = [runtime, state].filter(Boolean).join(' · ');
+    if (label) {
+      const st = document.createElement('span');
+      st.className = 'st';
+      st.textContent = label;
+      el.appendChild(st);
+    }
+    if (isTarget && target.buffer) el.title = target.buffer;
+    el.addEventListener('click', () => (isPinned ? chooseAgent(null, 'pin', el)
+                                       : isTarget ? chooseAgent(row.id, 'pin', el)
+                                       : chooseAgent(row.id, 'focus', el)));
+    agents.appendChild(el);
+  }
+  const add = document.createElement('button');
+  add.type = 'button';
+  add.className = 'ag new';
+  add.textContent = '+ new';
+  add.disabled = creatingAgent;
+  add.addEventListener('click', openCreateChoices);
+  agents.appendChild(add);
+}
+
+function refreshAgents() {
+  // Three unrelated failures used to print the same "agency unreachable": a dead
+  // network, an HTTP error (an expired auth session returns 401 and a body that is
+  // not JSON), and an exception thrown INSIDE renderAgents -- because the catch sat
+  // downstream of the call, a render bug wore a network error's clothes and was
+  // undebuggable from either end (2026-08-30). Name the failure, and keep the
+  // renderer out of the catch so its own bugs surface as themselves.
+  return fetch('agency/active', { cache: 'no-store' })
+    .then(response => {
+      if (!response.ok) throw new Error('HTTP ' + response.status);
+      return response.json();
+    })
+    .then(data => {
+      // ok:false is the proxy reporting the Agency is down. Not the same as
+      // nothing running -- an empty row for it would state something untrue.
+      if (data.ok === false) throw new Error(data.error || 'agency down');
+      return data;
+    })
+    .catch(err => {
+      dbg('agents fetch failed: ' + err.message);
+      return { __err: String(err.message).slice(0, 60) };
+    })
+    .then(data => (data.__err
+                   ? renderAgents([{ id: 'agency: ' + data.__err, status: '' }])
+                   : renderAgents(data.agents || [], data.target)));
+}
+refreshAgents();
+setInterval(refreshAgents, 7000);
+
+// What is running UNDER each invoked agent: the Agency JVM's child for that
+// agent and its descendants -- a clojure tick, a bb script, a lake build --
+// with elapsed time and cpu. Chips say who is invoking; this says what the
+// invocation is doing right now, which is the thing you cannot tell from a
+// chip that has read "invoking" for eleven minutes (Joe, 2026-09-01).
+const procs = $('#procs');
+function fmtElapsed(s) {
+  return s >= 3600 ? Math.floor(s / 3600) + 'h' + Math.floor((s % 3600) / 60) + 'm'
+       : s >= 60 ? Math.floor(s / 60) + 'm' + (s % 60) + 's' : s + 's';
+}
+function renderTree(node, depth, out) {
+  if (depth > 0) {
+    const hot = node.cpu >= 50 ? ' hot' : '';
+    out.push('  ' + '  '.repeat(depth - 1) + '\u2514 '
+             + '<span class="' + hot.trim() + '">' + esc(node.cmd) + '</span>'
+             + (node.cwd ? ' \u00b7 ' + esc(node.cwd) : '')
+             + ' \u00b7 ' + fmtElapsed(node.elapsed)
+             + (node.cpu >= 5 ? ' \u00b7 ' + Math.round(node.cpu) + '%' : ''));
+  }
+  for (const child of (node.children || [])) renderTree(child, depth + 1, out);
+}
+function esc(t) {
+  return String(t == null ? '' : t).replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
+}
+function renderProcs(data) {
+  if (!data || data.ok === false) { procs.innerHTML = ''; return; }
+  const out = [];
+  // An agent's ROOT process is its seat, and a seat outlives its turns: claude-20's
+  // `claude --print` had been alive 4h25m while the roster said idle, and printing
+  // that age the way a job's elapsed time is printed read as "executing for four
+  // hours" with no chip to match (Joe, 2026-09-01). So: invoking seats first, with
+  // their activity and what runs beneath; idle seats after, one dim line each,
+  // labelled as idle with the seat's age called uptime, and no tree (there is none).
+  const rows = (data.agents || []).slice();
+  const busy = r => r.status === 'invoking' || (r.tree.children || []).length > 0;
+  rows.sort((a, b) => (busy(b) ? 1 : 0) - (busy(a) ? 1 : 0));
+  for (const row of rows) {
+    if (busy(row)) {
+      const act = row.activity ? ' \u2014 ' + esc(row.activity) : '';
+      out.push('<span class="who">' + esc(row.id) + '</span> \u00b7 ' + esc(row.tree.cmd)
+               + ' \u00b7 invoking ' + fmtElapsed(row.elapsed) + act);
+      renderTree(row.tree, 0, out);
+    }
+    // Idle seats are not listed: a seat's uptime is not work, and a line for it
+    // reads as a job to wait on (Joe, 2026-09-01). The chips already say who is
+    // invoking; this panel says only what the invoking ones are running.
+  }
+  for (const tree of data.unmatched || []) {
+    // A JVM child no agent's invoke start explains: shown, not hidden, because
+    // an unexplained process is the kind of thing this panel exists to surface.
+    const sid = tree.session ? ' \u00b7 session ' + esc(String(tree.session).slice(0, 8)) : ' \u00b7 no session id';
+    out.push('<span class="who">?</span> \u00b7 ' + esc(tree.cmd) + ' \u00b7 ' + fmtElapsed(tree.elapsed) + sid);
+    renderTree(tree, 0, out);
+  }
+  procs.innerHTML = out.join('\n');
+}
+function refreshProcs() {
+  return fetch('agency/procs', { cache: 'no-store' })
+    .then(r => r.ok ? r.json() : { ok: false })
+    .catch(() => ({ ok: false }))
+    .then(renderProcs);
+}
+refreshProcs();
+setInterval(refreshProcs, 7000);
 
 const setStatus = t => statusEl.textContent = t;
 
@@ -367,11 +653,51 @@ async function initAudio() {
     });
     inRate = ctx.sampleRate;
     const src = ctx.createMediaStreamSource(stream);
-    node = ctx.createScriptProcessor(FRAME, 1, 1);
-    node.onaudioprocess = onFrame;
     const mute = ctx.createGain(); mute.gain.value = 0;
+
+    // Capture on the audio thread, not the main thread. ScriptProcessorNode delivers
+    // onaudioprocess on the main thread, and Chrome throttles that hard whenever the
+    // page is not focused: on 2026-08-29 a 58 s stretch of speech produced no frames
+    // at all -- not even a rejected one -- while the poll loop stretched from 1 s to
+    // 32 s between requests. AudioWorkletProcessor.process runs on the rendering
+    // thread and is not throttled, so speech survives looking at Emacs instead of the
+    // page. The render quantum is 128 samples, so re-block to FRAME to keep every
+    // frame-count constant below meaning what it says.
+    let usingWorklet = false;
+    if (ctx.audioWorklet) {
+      try {
+        const src128 = `
+          class VoxCapture extends AudioWorkletProcessor {
+            constructor() { super(); this.buf = new Float32Array(${FRAME}); this.n = 0; }
+            process(inputs) {
+              const ch = inputs[0] && inputs[0][0];
+              if (!ch) return true;
+              for (let i = 0; i < ch.length; i++) {
+                this.buf[this.n++] = ch[i];
+                if (this.n === ${FRAME}) { this.port.postMessage(this.buf.slice()); this.n = 0; }
+              }
+              return true;
+            }
+          }
+          registerProcessor('vox-capture', VoxCapture);`;
+        const url = URL.createObjectURL(new Blob([src128], { type: 'application/javascript' }));
+        await ctx.audioWorklet.addModule(url);
+        URL.revokeObjectURL(url);
+        node = new AudioWorkletNode(ctx, 'vox-capture');
+        node.port.onmessage = ev => onFrame(ev.data);
+        usingWorklet = true;
+      } catch (err) {
+        dbg('worklet unavailable: ' + err.name + ' — falling back to ScriptProcessor');
+      }
+    }
+    if (!usingWorklet) {
+      node = ctx.createScriptProcessor(FRAME, 1, 1);
+      node.onaudioprocess = ev => onFrame(new Float32Array(ev.inputBuffer.getChannelData(0)));
+    }
+
     src.connect(node); node.connect(mute); mute.connect(ctx.destination);
-    setStatus('ready — mic at ' + inRate + ' Hz');
+    dbg('audio ready rate=' + inRate + ' capture=' + (usingWorklet ? 'worklet' : 'scriptprocessor'));
+    setStatus('ready — mic at ' + inRate + ' Hz (' + (usingWorklet ? 'worklet' : 'main thread') + ')');
     return true;
   } catch (err) {
     setStatus('mic unavailable: ' + err.name + ' — ' + err.message);
@@ -379,11 +705,25 @@ async function initAudio() {
   }
 }
 
-function onFrame(e) {
-  const buf = new Float32Array(e.inputBuffer.getChannelData(0));
+let beatFrames = 0, beatMaxRms = 0;
+const BEAT_FRAMES = 78;             // ~5 s of audio, counted in frames not seconds
+
+function onFrame(buf) {
   let sum = 0;
   for (let i = 0; i < buf.length; i++) sum += buf[i] * buf[i];
   lastRms = Math.sqrt(sum / buf.length);
+  if (lastRms > beatMaxRms) beatMaxRms = lastRms;
+  // Counted in frames, not milliseconds, on purpose: setInterval is throttled to
+  // near-nothing exactly when the page is unfocused, which is the state we need to
+  // measure (one timer beat in 88 s, 2026-08-29). Frames arrive over a MessagePort
+  // from the worklet, which is not timer-driven, so this keeps reporting when the
+  // clock-based beat cannot. Silence still stops it -- that absence is a result too.
+  if (mode === 'always' && ++beatFrames >= BEAT_FRAMES) {
+    dbg('beat frames=' + beatFrames + ' maxrms=' + beatMaxRms.toFixed(5) +
+        ' ctx=' + (ctx && ctx.state) + ' vis=' + document.visibilityState +
+        ' foc=' + document.hasFocus() + ' vad=' + vad + ' thr=' + threshold.toFixed(5));
+    beatFrames = 0; beatMaxRms = 0;
+  }
 
   if (mode === 'ptt') { if (pttRec) pttChunks.push(buf); return; }
 
@@ -407,15 +747,22 @@ function onFrame(e) {
       noiseFloor = calAcc[Math.floor(calAcc.length / 2)] || 0.004;
       applySens();
       setStatus('calibrated — floor ' + noiseFloor.toFixed(4) + ', threshold ' + threshold.toFixed(4));
+      dbg('calibrated floor=' + noiseFloor.toFixed(4) + ' thr=' + threshold.toFixed(4));
     }
     return;
   }
 
   ring.push(buf); if (ring.length > PREROLL_FRAMES) ring.shift();
+  framesSinceClose++;
 
   if (vad === 'silence') {
     above = lastRms > threshold ? above + 1 : 0;
-    if (above >= START_FRAMES) { vad = 'speech'; below = 0; speechFrames = above; segFrames = ring.slice(); meterWrap.classList.add('speech'); }
+    if (above >= START_FRAMES) {
+      const preroll = Math.min(PREROLL_FRAMES, framesSinceClose);
+      vad = 'speech'; below = 0; speechFrames = above;
+      segFrames = ring.slice(Math.max(0, ring.length - preroll));
+      meterWrap.classList.add('speech');
+    }
   } else {
     segFrames.push(buf);
     if (lastRms > threshold) speechFrames++;
@@ -426,15 +773,20 @@ function onFrame(e) {
 }
 
 function closeSegment() {
-  vad = 'silence'; above = 0; below = 0;
+  vad = 'silence'; above = 0; below = 0; framesSinceClose = 0;
   meterWrap.classList.remove('speech');
   const frames = segFrames; segFrames = [];
   const secs = frames.length * FRAME / RATE;
-  if (secs < MIN_SEG_SEC) return;
+  if (secs < MIN_SEG_SEC) { dbg('drop short-seg secs=' + secs.toFixed(2)); return; }
   // A noise burst opens the gate and the hang time pads it to 1-3 s of mostly
   // silence; whisper then hallucinates on it ("Claude Codex.", "Thank you.").
   // Not sending it is cheaper and more reliable than filtering the text.
-  if (speechFrames < MIN_SPEECH_FRAMES) { addEntry('(noise burst — ' + secs.toFixed(1) + 's, not sent)', '', ''); return; }
+  const minFrames = pending.textContent ? MIN_SPEECH_FRAMES_PENDING : MIN_SPEECH_FRAMES;
+  if (speechFrames < minFrames) {
+    dbg('drop noise-burst secs=' + secs.toFixed(1) + ' frames=' + speechFrames + ' need=' + minFrames);
+    addEntry('(noise burst — ' + secs.toFixed(1) + 's, not sent)', '', ''); return;
+  }
+  dbg('send secs=' + secs.toFixed(1) + ' frames=' + speechFrames + ' qlen=' + queue.length);
   queue.push(flatten(frames));
   drain();
 }
@@ -514,7 +866,10 @@ function handle(r, roundTrip, fromVad) {
   const text = (r.text || '').trim();
   const meta = [r.audio_sec + 's', '<b>' + r.infer_ms + ' ms</b>', roundTrip + ' ms rt',
                 'rtf ' + r.rtf, r.model, 'ac ' + (r.audio_ctx || 'full')]
-               .concat(r.stutter_trimmed ? ['<b>stutter trimmed</b>'] : []).join(' · ');
+               .concat(r.stutter_trimmed ? ['<b>stutter trimmed</b>'] : [])
+               .concat(r.looped_segments ? ['<b>' + r.looped_segments + ' looped seg' +
+                                            (r.looped_segments > 1 ? 's' : '') + ' dropped</b>'] : [])
+               .join(' · ');
 
   if (!fromVad) {
     if (!text || JUNK.test(text)) {
@@ -528,7 +883,7 @@ function handle(r, roundTrip, fromVad) {
     return;
   }
 
-  if (!text || JUNK.test(text.trim())) { addEntry(text || '(nothing)', meta + ' · dropped', ''); return; }
+  if (!text || JUNK.test(text.trim())) { dbg('drop junk ' + JSON.stringify(text || '')); addEntry(text || '(nothing)', meta + ' · dropped', ''); return; }
 
   // A one-word segment opening a paragraph is almost never dictation — it is a
   // noise burst rendered as a word ("Puck.", "Pelley.", "Watch."). Judged by
@@ -536,6 +891,7 @@ function handle(r, roundTrip, fromVad) {
   // ("Okay.") can be real, so it is kept; the trigger word is always honoured.
   const m = findTrigger(text);
   if (!m && !pending.textContent && text.split(/\s+/).filter(Boolean).length === 1) {
+    dbg('drop one-word-opener ' + JSON.stringify(text));
     addEntry(text, meta + ' · one-word opener, dropped', ''); return;
   }
   if (!m) {
@@ -558,6 +914,15 @@ function handle(r, roundTrip, fromVad) {
   if (payload && after) preview(after);
 }
 
+// Every decision to drop audio happens here on the phone, so a page that has stopped
+// listening and a page nobody is talking to look identical from the box — which is
+// exactly the hole we kept falling into on 2026-08-29. Report the decisions as a
+// request the server does not serve: it 404s, but the access log records the line, so
+// `journalctl --user -u voxterm` shows what the page decided and why.
+function dbg(msg) {
+  try { navigator.sendBeacon('dbg?m=' + encodeURIComponent(msg)); } catch (e) {}
+}
+
 // Mirror the pending buffer into Emacs as ghost text (see voxterm-preview).
 // Fire-and-forget: a failure just means no preview.
 function preview(text) {
@@ -573,6 +938,19 @@ function setPending(text, mirror = true) {
   pendingAt = performance.now();
   if (mirror) preview(text);
 }
+
+// Losing speech while the page is unfocused has three possible causes that look
+// identical from the box -- a suspended AudioContext, a mic Android has muted for a
+// non-foreground app, or a main thread frozen so hard it cannot upload. These three
+// numbers separate them: no beat at all means the thread is dead; frames=0 means the
+// worklet is not being called; frames>0 with maxrms~0 means the mic is delivering
+// silence, which is Android's doing and not fixable from here (2026-08-29).
+setInterval(() => {
+  if (mode !== 'always' || !ctx) return;
+  dbg('tick ctx=' + ctx.state + ' foc=' + document.hasFocus());
+  // If the browser suspended the context behind our back, ask for it back.
+  if (ctx.state === 'suspended') ctx.resume().then(() => dbg('ctx resumed')).catch(e => dbg('ctx resume failed: ' + e.name));
+}, 5000);
 
 setInterval(() => {
   const text = pending.textContent;
@@ -723,6 +1101,19 @@ $('#copy').addEventListener('click', async () => {
 });
 $('#retract').addEventListener('click', () => { const t = pending.textContent; setPending(''); addEntry(t, 'retracted by tap', ''); setStatus('buffer retracted — nothing sent'); });
 $('#clear').addEventListener('click', () => { out.textContent = ''; setPending(''); log.innerHTML = ''; setStatus('cleared'); });
+
+// The ghost overlay in Emacs is cleared only by a newer preview, by an empty one, or
+// by voxterm-insert. A reload or a closed tab sends none of those, so the last preview
+// stayed at point in the REPL indefinitely -- and since both its ends advance with the
+// stream it drifted to the bottom, reading as if it belonged to the current turn
+// (2026-08-29). Clear it when this page starts and when it goes away.
+preview('');
+addEventListener('pagehide', () => {
+  if ($('#sink').value !== 'emacs') return;
+  // sendBeacon, not fetch: an unloading page is not guaranteed to finish a fetch.
+  navigator.sendBeacon('preview', new Blob([JSON.stringify({ text: '' })],
+                                           { type: 'application/json' }));
+});
 
 // meter paint loop
 (function paint() {
