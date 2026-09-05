@@ -1241,6 +1241,12 @@ BACKLOG_BOARDS = [
 ]
 PROPOSALS_DIR = os.path.expanduser(
     "~/code/futon2/holes/labs/wm-contract/proposals")
+# The morning bulletin (:B1): the wm-build-loop writes one BULLETIN-<date>.md
+# per session at its natural stop. The backlog panel carries a pointer to the
+# latest one so the digest is reachable from the same place as the queue,
+# rather than only through an agent narrating it.
+BULLETIN_DIR = os.path.expanduser(
+    "~/code/futon2/holes/labs/wm-contract/bulletins")
 _BACKLOG_CACHE = {}  # path -> (mtime, rows)
 
 _BB_BOARD_JSON = (
@@ -1268,6 +1274,28 @@ def _board_rows(path):
     rows = json.loads(out.stdout) if out.returncode == 0 else []
     _BACKLOG_CACHE[path] = (mtime, rows)
     return rows
+
+
+def latest_bulletin():
+    """Newest BULLETIN-<date>.md, its date, size and age in seconds.
+
+    Names sort as dates do (ISO), so the last name is the latest bulletin.
+    The generator rewrites the file only when the day's content changes, so
+    the mtime this reports is the age of the CONTENT, not of the last run.
+    """
+    try:
+        names = sorted(n for n in os.listdir(BULLETIN_DIR)
+                       if n.startswith("BULLETIN-") and n.endswith(".md"))
+    except OSError:
+        return None
+    if not names:
+        return None
+    path = os.path.join(BULLETIN_DIR, names[-1])
+    return {"name": names[-1],
+            "path": path,
+            "date": names[-1][len("BULLETIN-"):-len(".md")],
+            "bytes": os.path.getsize(path),
+            "age": int(time.time() - os.path.getmtime(path))}
 
 
 def agency_backlog():
@@ -1307,7 +1335,7 @@ def agency_backlog():
                                 - os.path.getmtime(
                                     os.path.join(PROPOSALS_DIR, f)))})
     return {"ok": True, "boards": boards, "needs_joe": needs_joe,
-            "proposals": proposals}
+            "proposals": proposals, "bulletin": latest_bulletin()}
 
 
 class Handler(BaseHTTPRequestHandler):
