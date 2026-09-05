@@ -1259,6 +1259,9 @@ _BB_BOARD_JSON = (
     "                   :status (name (or (:status i) :?))"
     "                   :owner (str (or (:owner i) \"\"))"
     "                   :deps (mapv name (or (:depends-on i) []))"
+    "                   :blocker (gist (or (:blocker i) \"\"))"
+    "                   :ruling-blocked (boolean (and (= :blocked (:status i))"
+    "                     (re-find #\"(?i)joe|ruling|reviewer decision\" (str (:blocker i)))))"
     "                   :gist (gist (:statement i))})]"
     "  (println (json/generate-string (mapv row (:items w)))))")
 
@@ -1307,14 +1310,17 @@ def agency_backlog():
             rows = _board_rows(path)
         except Exception:
             continue
-        # "Needs clarification" is a fact the board already records three
-        # ways: a row owned by Joe, a row parked :needs-joe, or a J-class
-        # (judgement) row not yet done. Rendered apart because these are the
-        # items only the operator can move.
+        # "Needs clarification" is a fact the board records four ways: a row
+        # owned by Joe, a row parked :needs-joe, a J-class (judgement) row
+        # not yet done, or a blocked row whose :blocker text says its exit is
+        # a ruling (2026-09-05: four ruling-blocked rows surfaced as one
+        # because only the first three were read). Rendered apart because
+        # these are the items only the operator can move.
         joes = [r for r in rows
                 if ("joe" in r.get("owner", "").lower()
                     or r.get("status") == "needs-joe"
-                    or (r.get("class") == "J" and r.get("status") != "done"))
+                    or (r.get("class") == "J" and r.get("status") != "done")
+                    or r.get("ruling-blocked"))
                 and r.get("status") != "done"]
         opens = [r for r in rows if r.get("status") == "open"]
         blocked = [r for r in rows
