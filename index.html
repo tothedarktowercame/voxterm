@@ -679,7 +679,8 @@ function fmtAge(s) {
 }
 function backlogItem(r, extra) {
   const gist = String(r.gist || '').slice(0, 96);
-  return '<div class="item"><span class="id">' + esc(r.id) + '</span>'
+  const cls = r.class && r.class !== '?' ? '/' + esc(r.class) : '';
+  return '<div class="item"><span class="id">' + esc(r.id) + cls + '</span>'
        + (extra ? ' · ' + extra : '') + ' · ' + esc(gist) + '</div>';
 }
 function backlogSection(out, label, rows, render) {
@@ -692,11 +693,19 @@ function renderBacklog() {
   const data = backlogData;
   if (!data || data.ok === false) { backlogEl.innerHTML = ''; return; }
   const boards = data.boards || [];
-  const opens = boards.flatMap(b => (b.open || []).map(r => ({ ...r, board: b.name })));
-  const blocked = boards.flatMap(b => (b.blocked || []).map(r => ({ ...r, board: b.name })));
+  let opens = boards.flatMap(b => (b.open || []).map(r => ({ ...r, board: b.name })));
+  let blocked = boards.flatMap(b => (b.blocked || []).map(r => ({ ...r, board: b.name })));
+  // Fundamentals are not queue items, they are the gate: while an F row is
+  // open the build loop refuses all other work (Joe, 2026-09-05, the
+  // stop-other-work ruling). So they render as their own top section, never
+  // interleaved, and the strip names them first.
+  const funds = opens.concat(blocked).filter(r => r.class === 'F');
+  opens = opens.filter(r => r.class !== 'F');
+  blocked = blocked.filter(r => r.class !== 'F');
   const joes = data.needs_joe || [];
   const props = data.proposals || [];
   const bits = [];
+  if (funds.length) bits.push('<span class="joe">' + funds.length + ' FUNDAMENTAL</span>');
   if (joes.length) bits.push('<span class="joe">' + joes.length + ' for Joe</span>');
   if (props.length) bits.push('<span class="joe">' + props.length + ' proposal' + (props.length > 1 ? 's' : '') + '</span>');
   bits.push(opens.length + ' queued');
@@ -704,8 +713,10 @@ function renderBacklog() {
   const out = ['<div class="strip">' + (backlogExpanded ? '▾' : '▸')
                + ' backlog: ' + bits.join(' · ') + '</div>'];
   if (backlogExpanded) {
-    // Needs-Joe first: the items only the operator can move. Proposals beside
+    // Gate first, then the items only the operator can move. Proposals beside
     // them -- a strawman awaiting review is a question in file form.
+    backlogSection(out, 'fundamentals — loop works ONLY these while open', funds,
+                   r => backlogItem(r, '<span class="joe">' + esc(r.status) + '</span>'));
     backlogSection(out, 'needs Joe', joes,
                    r => backlogItem(r, '<span class="joe">' + esc(r.board) + '</span>'));
     backlogSection(out, 'proposals awaiting review', props,
