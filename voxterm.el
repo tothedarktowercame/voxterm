@@ -6,6 +6,7 @@
 ;;; Code:
 
 (require 'cl-lib)
+(require 'seq)
 
 (defgroup voxterm nil
   "Dictated text arriving from the voxterm whisper server."
@@ -41,15 +42,80 @@ synthesising a keypress from a daemon eval."
        (frame-visible-p f)
        (not (frame-parameter f 'voxterm-ignore))))
 
+(defun voxterm--live-buffer-window (buf)
+  "Return a live non-minibuffer window showing BUF, or nil.
+`get-buffer-window' will happily answer with a minibuffer window once BUF has
+been planted in one, which would keep a corrupted layout alive across every
+later dictation."
+  (car (seq-remove #'window-minibuffer-p (get-buffer-window-list buf nil t))))
+
 (defun voxterm--focus-window ()
-  "Return the window selected by voxterm's terminal-focus heuristic."
-  (let ((frame (or (car (filtered-frame-list
-                         (lambda (f) (and (voxterm--usable-frame-p f)
-                                          (eq (ignore-errors (frame-focus-state f)) t)))))
-                   (and (voxterm--usable-frame-p last-event-frame) last-event-frame)
-                   (car (filtered-frame-list #'voxterm--usable-frame-p))
-                   (selected-frame))))
-    (frame-selected-window frame)))
+  "Return the window selected by voxterm's terminal-focus heuristic.
+
+Never answers with a minibuffer window.  `frame-selected-window' returns the
+minibuffer window whenever a prompt is open in that frame, and nothing
+downstream catches it: a minibuffer window is not `window-dedicated-p', so
+`voxterm--pinned-window' falls through to its last clause and
+`set-window-buffer's the pinned agent buffer straight into the minibuffer.
+The REPL then occupies the echo area, the pending prompt is stranded behind it
+in ` *Minibuf-1*', and every later dictation lands there too (2026-08-30).
+`voxterm--writable-p' cannot catch it either: it asks `minibufferp' about the
+*buffer*, which by then is an ordinary REPL buffer, not a minibuffer.
+
+`minibuffer-selected-window' is the window that was selected before the prompt
+opened, which is exactly what \"the window the user is typing in\" means."
+  (let* ((frame (or (car (filtered-frame-list
+                          (lambda (f) (and (voxterm--usable-frame-p f)
+                                           (eq (ignore-errors (frame-focus-state f)) t)))))
+                    (and (voxterm--usable-frame-p last-event-frame) last-event-frame)
+                    (car (filtered-frame-list #'voxterm--usable-frame-p))
+                    (selected-frame)))
+         (win (frame-selected-window frame)))
+    (if (not (window-minibuffer-p win))
+        win
+      (let ((prior (minibuffer-selected-window)))
+        (if (and (window-live-p prior) (not (window-minibuffer-p prior)))
+            prior
+          (car (window-list frame 'nomini)))))))
+
+(defun voxterm--place-in-focus-window (buf)
+  "Show BUF in the window the user is looking at; return that window.
+
+Rather than reusing whatever window already holds it.  With one tty frame per
+agent every agent buffer is already displayed somewhere, so searching all
+frames first found codex-17 in F10 while the user was watching F11 and selected
+a window on a terminal they could not see: the pin moved and the screen did not
+(2026-08-29).  Emacs cannot raise a tty frame — that belongs to the terminal —
+so the only way to put a buffer in front of someone is to put it in the window
+already in front of them."
+  (let ((win (voxterm--focus-window)))
+    (cond
+     ((not (window-live-p win)) (voxterm--live-buffer-window buf))
+     ((eq (window-buffer win) buf) win)
+     ;; Dedicated windows are somebody else's: side windows, mission
+     ;; control. Leave them be and fall back to wherever it already shows.
+     ((window-dedicated-p win) (or (voxterm--live-buffer-window buf) win))
+     (t (set-window-buffer win buf) win))))
+
+(defun voxterm--repl-prompt-p (&optional buf)
+  "Non-nil when BUF is an agent REPL whose input line is the end of the buffer.
+`agent-chat-send-input' reads from `agent-chat--input-start' to `point-max',
+so for these buffers point anywhere earlier is point in the transcript."
+  (with-current-buffer (or buf (current-buffer))
+    (and (boundp 'agent-chat--input-start)
+         (markerp agent-chat--input-start)
+         (marker-position agent-chat--input-start)
+         t)))
+
+(defun voxterm--land-on-input (win)
+  "Put point in WIN at the end of its buffer, where a REPL's input line is.
+`recenter' is best-effort — it is meaningless on a window that is not
+displaying yet, and a failure there must not undo a target change that
+otherwise worked."
+  (with-selected-window win
+    (goto-char (point-max))
+    (ignore-errors (recenter -1)))
+  (set-window-point win (with-current-buffer (window-buffer win) (point-max))))
 
 (defun voxterm--pinned-window ()
   "Return a live window for the pinned buffer, or nil when no pin survives."
@@ -57,11 +123,7 @@ synthesising a keypress from a daemon eval."
     (let ((buf (get-buffer voxterm-pinned-buffer-name)))
       (if (not (buffer-live-p buf))
           (progn (setq voxterm-pinned-buffer-name nil) nil)
-        (or (get-buffer-window buf t)
-            (let ((win (voxterm--focus-window)))
-              (when (window-live-p win)
-                (set-window-buffer win buf)
-                win)))))))
+        (voxterm--place-in-focus-window buf)))))
 
 (defun voxterm--target-window ()
   "The window a dictation should land in: the selected window of the frame
@@ -103,6 +165,35 @@ A killed pinned buffer clears the pin and resumes this focus order."
         (setq voxterm-pinned-buffer-name nil)
         (user-error "Could not display buffer %s" name))
       (select-window win)
+      ;; Land on the prompt, not wherever the buffer was last read. Tapping a chip
+      ;; means "I am talking to this agent now", and a REPL's input line is at the
+      ;; end; leaving point halfway up the scrollback would insert dictation into
+      ;; the middle of the transcript.
+      (voxterm--land-on-input win)
+      (buffer-name (window-buffer win)))))
+
+;;;###autoload
+(defun voxterm-focus (name)
+  "Move the cursor into the live buffer named NAME without pinning to it.
+
+The first tap on a chip means \"talk to this one now\", which is what focus
+already expresses: with no pin, `voxterm--target-window' answers with whatever
+the focused window shows, so putting that buffer there is enough to redirect
+dictation.  Pinning is the stronger claim — the buffer follows you into every
+frame you look at — and is a second tap away, in `voxterm-pin'.
+
+A surviving pin would outrank focus in `voxterm--target-window', so asking for
+the cursor here necessarily drops it."
+  (interactive (list (read-buffer "Move voxterm cursor to buffer: " (buffer-name) t)))
+  (let ((buf (get-buffer name)))
+    (unless (buffer-live-p buf)
+      (user-error "No live buffer named %s" name))
+    (setq voxterm-pinned-buffer-name nil)
+    (let ((win (voxterm--place-in-focus-window buf)))
+      (unless (window-live-p win)
+        (user-error "Could not display buffer %s" name))
+      (select-window win)
+      (voxterm--land-on-input win)
       (buffer-name (window-buffer win)))))
 
 ;;;###autoload
@@ -208,6 +299,16 @@ Returns a description of where the text went."
     (if (not (voxterm--writable-p buf))
         (voxterm--append-fallback text submit)
       (let ((sent (with-selected-window win
+                    ;; A REPL takes dictation at its input line, never at point.
+                    ;; Point drifts: scrolling back to read the transcript leaves
+                    ;; it mid-buffer, and the unpinned path never landed on the
+                    ;; prompt at all.  Inserting there put the sentence into the
+                    ;; transcript while `agent-chat-send-input' sent the (empty)
+                    ;; input region instead.  An ordinary buffer still takes text
+                    ;; at point — dictating prose into a file means dictating it
+                    ;; where you are.
+                    (when (voxterm--repl-prompt-p)
+                      (goto-char (point-max)))
                     (when (and voxterm-space-before
                                (not (bolp))
                                (not (memq (char-before) '(?\s ?\t ?\( ?\[ ?\" ?'))))

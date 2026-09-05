@@ -972,6 +972,13 @@ def _short_cmd(comm, args):
 
 _UUID = re.compile(r"\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b")
 
+# session id -> agent id, remembered across polls. The registry is the source of
+# truth, but this endpoint re-reads it every 7s and one response that omits an
+# agent (or omits its session-id while it re-registers) is enough to strand that
+# agent's seat as "unattributed" for the frame. Session ids are immutable and
+# never reassigned, so remembering a mapping can only ever add information.
+_SESSION_OWNERS = {}
+
 
 def _session_in(args):
     """A Claude seat is `claude --resume <sid>` and a resumed Codex is
@@ -1120,6 +1127,12 @@ def agency_procs():
                 best = (abs(d), cand)
         return best[1] if best else None
 
+    _SESSION_OWNERS.update(by_session)
+
+    def owner_of_session(sid):
+        """The agent a `--resume <sid>` seat belongs to, registry first."""
+        return by_session.get(sid) or _SESSION_OWNERS.get(sid)
+
     rows, unmatched, used = [], [], set()
     # The unattended build loop (futon2 wm-build-loop.sh) runs OUTSIDE the
     # Agency JVM -- a bash loop under nohup that spawns `claude -p` / `codex
@@ -1141,8 +1154,17 @@ def agency_procs():
         c = procs[child]
         ident, how = None, None
         sid = c.get("session")
-        if sid and by_session.get(sid) and by_session[sid] not in used:
-            ident, how = by_session[sid], "session"
+        # `--resume <sid>` in argv IS the identity: the registry maps that uuid
+        # to exactly one agent, so a session hit is a fact, not a guess, and
+        # must not be gated on `used`. When one agent legitimately has two live
+        # seats (the previous turn's not yet reaped, the next turn's already
+        # spawned) the gate sent the second one down the fuzzy paths into
+        # `unmatched`, where a registered-at window days stale could not name it
+        # either -- printing "unattributed seat" directly beside the session id
+        # that identifies it (Joe, 2026-09-05). `used` still guards the
+        # start-time path below, which is the one that can actually collide.
+        if sid and owner_of_session(sid):
+            ident, how = owner_of_session(sid), "session"
         else:
             best = None
             for t, cand in starts:
@@ -1191,7 +1213,12 @@ def agency_procs():
                          "elapsed": c["elapsed"], "tree": tree})
         else:
             tree["session"] = sid
-            tree["likely-agent"] = likely_owner(c["start"])
+            # Session id first: it is exact and durable, while likely_owner's
+            # +-20s window around registered-at only fits a seat that started at
+            # registration -- never one that respawned days later, which is the
+            # ordinary case for a long-lived roster.
+            tree["likely-agent"] = ((owner_of_session(sid) if sid else None)
+                                    or likely_owner(c["start"]))
             unmatched.append(tree)
     return {"ok": True, "jvm": jvm, "agents": rows, "unmatched": unmatched}
 
