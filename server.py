@@ -1223,6 +1223,93 @@ def agency_procs():
     return {"ok": True, "jvm": jvm, "agents": rows, "unmatched": unmatched}
 
 
+# --- backlog: what is QUEUED and what NEEDS JOE, not just what is running.
+# The chips/procs panels show work in progress; the boards (worklist.edn per
+# lab) hold the queue and the operator-facing questions, and until now those
+# were visible only through an agent narrating them (Joe, 2026-09-05: "what if
+# voxterm was a bit more explicit about the backlog... which items are queued
+# for processing, and which need clarification").
+# worklist.edn is EDN, so parsing is delegated to bb (present on this box; the
+# boards' own validators are bb scripts) and cached by mtime -- the wm-contract
+# board is ~900KB and changes a few times an hour at most.
+
+BACKLOG_BOARDS = [
+    ("wm-contract",
+     os.path.expanduser("~/code/futon2/holes/labs/wm-contract/worklist.edn")),
+    ("zaif-harness",
+     os.path.expanduser("~/code/futon2/holes/labs/zaif-harness/worklist.edn")),
+]
+PROPOSALS_DIR = os.path.expanduser(
+    "~/code/futon2/holes/labs/wm-contract/proposals")
+_BACKLOG_CACHE = {}  # path -> (mtime, rows)
+
+_BB_BOARD_JSON = (
+    "(require '[clojure.edn :as edn] '[cheshire.core :as json])"
+    "(let [w (edn/read-string (slurp (first *command-line-args*)))"
+    "      gist (fn [s] (let [s (str s)]"
+    "                     (if (> (count s) 140) (str (subs s 0 140) \"...\") s)))"
+    "      row (fn [i] {:id (name (:id i))"
+    "                   :class (name (or (:class i) :?))"
+    "                   :status (name (or (:status i) :?))"
+    "                   :owner (str (or (:owner i) \"\"))"
+    "                   :deps (mapv name (or (:depends-on i) []))"
+    "                   :gist (gist (:statement i))})]"
+    "  (println (json/generate-string (mapv row (:items w)))))")
+
+
+def _board_rows(path):
+    """All rows of one board, parsed by bb, cached by mtime."""
+    mtime = os.path.getmtime(path)
+    hit = _BACKLOG_CACHE.get(path)
+    if hit and hit[0] == mtime:
+        return hit[1]
+    out = subprocess.run(["bb", "-e", _BB_BOARD_JSON, path],
+                         capture_output=True, text=True, timeout=20)
+    rows = json.loads(out.stdout) if out.returncode == 0 else []
+    _BACKLOG_CACHE[path] = (mtime, rows)
+    return rows
+
+
+def agency_backlog():
+    boards, needs_joe = [], []
+    for name, path in BACKLOG_BOARDS:
+        if not os.path.exists(path):
+            continue
+        try:
+            rows = _board_rows(path)
+        except Exception:
+            continue
+        # "Needs clarification" is a fact the board already records three
+        # ways: a row owned by Joe, a row parked :needs-joe, or a J-class
+        # (judgement) row not yet done. Rendered apart because these are the
+        # items only the operator can move.
+        joes = [r for r in rows
+                if ("joe" in r.get("owner", "").lower()
+                    or r.get("status") == "needs-joe"
+                    or (r.get("class") == "J" and r.get("status") != "done"))
+                and r.get("status") != "done"]
+        opens = [r for r in rows if r.get("status") == "open"]
+        blocked = [r for r in rows
+                   if r.get("status") == "blocked" and r not in joes]
+        for r in joes:
+            needs_joe.append(r | {"board": name})
+        boards.append({"name": name,
+                       "open": opens, "blocked": blocked,
+                       "done": sum(1 for r in rows
+                                   if r.get("status") == "done")})
+    proposals = []
+    if os.path.isdir(PROPOSALS_DIR):
+        for f in sorted(os.listdir(PROPOSALS_DIR)):
+            if f.endswith(".md"):
+                proposals.append(
+                    {"name": f,
+                     "age": int(time.time()
+                                - os.path.getmtime(
+                                    os.path.join(PROPOSALS_DIR, f)))})
+    return {"ok": True, "boards": boards, "needs_joe": needs_joe,
+            "proposals": proposals}
+
+
 class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
 
@@ -1464,6 +1551,13 @@ class Handler(BaseHTTPRequestHandler):
             except Exception as e:
                 self._send(200, json.dumps({"ok": False, "error": str(e),
                                             "agents": []}),
+                           "application/json")
+        elif path == "/agency/backlog":
+            try:
+                self._send(200, json.dumps(agency_backlog()),
+                           "application/json")
+            except Exception as e:
+                self._send(200, json.dumps({"ok": False, "error": str(e)}),
                            "application/json")
         elif path == "/agency/jobs":
             try:

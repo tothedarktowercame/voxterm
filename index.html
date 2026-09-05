@@ -117,6 +117,14 @@
   #procs .who { color: var(--fg); }
   #procs .hot { color: var(--accent, #d48700); }
   #procs .idle { opacity: 0.55; }
+  /* --- backlog panel: queued + needs-Joe, collapsed to one line by default --- */
+  #backlog { font-family: ui-monospace, Menlo, monospace; font-size: 11.5px; color: var(--dim);
+             margin: -4px 0 10px; line-height: 1.4; overflow-x: auto; }
+  #backlog .strip { cursor: pointer; user-select: none; -webkit-user-select: none; }
+  #backlog .joe { color: var(--accent, #d48700); }
+  #backlog .sec { color: var(--fg); margin-top: 3px; }
+  #backlog .item { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #backlog .id { color: var(--fg); }
   #agents:empty::before { content: "nothing invoking"; color: var(--dim); font-style: italic; font-size: 12.5px; }
   .ag { border: 1px solid var(--line); background: var(--panel); border-radius: 999px;
         min-height: 44px; padding: 8px 14px; white-space: nowrap; color: var(--dim);
@@ -159,6 +167,7 @@
 <main>
   <div id="agents"></div>
   <div id="procs"></div>
+  <div id="backlog"></div>
   <div id="newKinds" aria-label="create agent"></div>
   <div id="status">tap the button once to grant mic access</div>
 
@@ -652,6 +661,73 @@ function refreshProcs() {
 }
 refreshProcs();
 setInterval(refreshProcs, 7000);
+
+// Backlog: what is QUEUED and what NEEDS JOE. Chips and procs show work in
+// progress; this shows the boards -- queued rows, blocked rows and what they
+// wait on, rows only the operator can move, proposals awaiting review (Joe,
+// 2026-09-05: "directly see which items are queued for processing, and which
+// need clarification... could take up a lot of space if we aren't careful").
+// Space discipline: ONE summary line by default; tap it to expand; sections
+// capped at 8 items with a "+N more" tail. Polls at 20s -- boards change a
+// few times an hour, not per second.
+const backlogEl = $('#backlog');
+let backlogExpanded = false;
+let backlogData = null;
+function fmtAge(s) {
+  return s >= 86400 ? Math.floor(s / 86400) + 'd'
+       : s >= 3600 ? Math.floor(s / 3600) + 'h' : Math.floor(s / 60) + 'm';
+}
+function backlogItem(r, extra) {
+  const gist = String(r.gist || '').slice(0, 96);
+  return '<div class="item"><span class="id">' + esc(r.id) + '</span>'
+       + (extra ? ' · ' + extra : '') + ' · ' + esc(gist) + '</div>';
+}
+function backlogSection(out, label, rows, render) {
+  if (!rows.length) return;
+  out.push('<div class="sec">' + label + '</div>');
+  rows.slice(0, 8).forEach(r => out.push(render(r)));
+  if (rows.length > 8) out.push('<div class="item">+' + (rows.length - 8) + ' more</div>');
+}
+function renderBacklog() {
+  const data = backlogData;
+  if (!data || data.ok === false) { backlogEl.innerHTML = ''; return; }
+  const boards = data.boards || [];
+  const opens = boards.flatMap(b => (b.open || []).map(r => ({ ...r, board: b.name })));
+  const blocked = boards.flatMap(b => (b.blocked || []).map(r => ({ ...r, board: b.name })));
+  const joes = data.needs_joe || [];
+  const props = data.proposals || [];
+  const bits = [];
+  if (joes.length) bits.push('<span class="joe">' + joes.length + ' for Joe</span>');
+  if (props.length) bits.push('<span class="joe">' + props.length + ' proposal' + (props.length > 1 ? 's' : '') + '</span>');
+  bits.push(opens.length + ' queued');
+  bits.push(blocked.length + ' blocked');
+  const out = ['<div class="strip">' + (backlogExpanded ? '▾' : '▸')
+               + ' backlog: ' + bits.join(' · ') + '</div>'];
+  if (backlogExpanded) {
+    // Needs-Joe first: the items only the operator can move. Proposals beside
+    // them -- a strawman awaiting review is a question in file form.
+    backlogSection(out, 'needs Joe', joes,
+                   r => backlogItem(r, '<span class="joe">' + esc(r.board) + '</span>'));
+    backlogSection(out, 'proposals awaiting review', props,
+                   p => '<div class="item"><span class="joe">' + esc(p.name)
+                      + '</span> · ' + fmtAge(p.age) + ' old</div>');
+    backlogSection(out, 'queued', opens, r => backlogItem(r, esc(r.board)));
+    backlogSection(out, 'blocked', blocked,
+                   r => backlogItem(r, (r.deps && r.deps.length
+                                        ? 'waits ' + esc(r.deps.join(' '))
+                                        : 'blocker recorded')));
+  }
+  backlogEl.innerHTML = out.join('\n');
+}
+backlogEl.addEventListener('click', () => { backlogExpanded = !backlogExpanded; renderBacklog(); });
+function refreshBacklog() {
+  return fetch('agency/backlog', { cache: 'no-store' })
+    .then(r => r.ok ? r.json() : { ok: false })
+    .catch(() => ({ ok: false }))
+    .then(d => { backlogData = d; renderBacklog(); });
+}
+refreshBacklog();
+setInterval(refreshBacklog, 20000);
 
 const setStatus = t => statusEl.textContent = t;
 
