@@ -10,6 +10,7 @@ ssh tunnel (see README), which also satisfies the browser's secure-context
 requirement for getUserMedia without any TLS setup.
 """
 import collections
+import glob
 import json
 import base64
 import os
@@ -65,6 +66,58 @@ def codex_models(limit=4):
     except Exception:
         slugs = []
     return slugs or ["gpt-5.6-sol"]
+
+
+# Model signatures for chips whose registration declared none. Claude session
+# files are the exact per-seat record (every turn logs its model); codex has no
+# per-seat record, so the newest rollout log stands in for the CLI default the
+# undirected `codex exec` calls actually run. Both cached: session tails by
+# (path, mtime), the codex sweep for an hour.
+_SESSION_MODEL_CACHE = {}   # sid -> (path, mtime, model)
+_CODEX_DEFAULT_CACHE = [0.0, None]  # [checked-at, slug]
+
+
+def claude_session_model(sid):
+    """The model this seat's session last ran, from its .jsonl tail."""
+    if not sid:
+        return None
+    cached = _SESSION_MODEL_CACHE.get(sid)
+    try:
+        path = (cached and cached[0]) or \
+            glob.glob(os.path.expanduser(
+                "~/.claude/projects/*/%s.jsonl" % sid))[0]
+        mtime = os.path.getmtime(path)
+        if cached and cached[1] == mtime:
+            return cached[2]
+        with open(path, "rb") as handle:
+            handle.seek(max(0, os.path.getsize(path) - 262144))
+            tail = handle.read().decode("utf-8", "replace")
+        hits = re.findall(r'"model"\s*:\s*"(claude-[^"]+)"', tail)
+        model = hits[-1] if hits else None
+        _SESSION_MODEL_CACHE[sid] = (path, mtime, model)
+        return model
+    except (IndexError, OSError):
+        return None
+
+
+def codex_observed_default():
+    """The model the codex CLI ran most recently (its effective default)."""
+    now = time.time()
+    if now - _CODEX_DEFAULT_CACHE[0] < 3600:
+        return _CODEX_DEFAULT_CACHE[1]
+    slug = None
+    try:
+        logs = glob.glob(os.path.expanduser(
+            "~/.codex/sessions/*/*/*/rollout-*.jsonl"))
+        if logs:
+            with open(max(logs, key=os.path.getmtime), "rb") as handle:
+                tail = handle.read(262144).decode("utf-8", "replace")
+            hits = re.findall(r'"model"\s*:\s*"([^"]+)"', tail)
+            slug = hits[0] if hits else None
+    except OSError:
+        pass
+    _CODEX_DEFAULT_CACHE[:] = [now, slug]
+    return slug
 
 
 AGENT_RUNTIMES = {
@@ -1428,9 +1481,41 @@ class Handler(BaseHTTPRequestHandler):
                 # choice is ever visible again: "+ new -> Fable" says so once in
                 # the status line and then you are looking at "claude-11", which
                 # says nothing about what it costs to talk to.
+                #
+                # Most seats never declared a model at registration (only
+                # claude-1 did, 2026-09-06 survey), so declaration alone left
+                # every other chip blank — Joe: "That's the level of
+                # transparency that I want to have." Resolution order, best
+                # evidence first, each rung something measured rather than
+                # assumed:
+                #   1. roster metadata.model (declared at registration);
+                #   2. claude seats: the session .jsonl records the model of
+                #      every turn — exact for THIS seat, read from its tail;
+                #   3. codex/zai seats: the runtime default, because neither
+                #      the loops nor the Agency invoke pass a per-seat model
+                #      (codex_cli.clj:530 "when absent, use Codex CLI
+                #      config/default"; zai_api.clj:27) — measured from the
+                #      newest codex rollout log / the zai default constant,
+                #      and marked "(default)" on the chip since a per-call
+                #      override remains possible.
                 def model_of(ident):
-                    meta = (by_id.get(ident) or {}).get("metadata") or {}
-                    return meta.get("model")
+                    agent = by_id.get(ident) or {}
+                    meta = agent.get("metadata") or {}
+                    declared = meta.get("model")
+                    if declared:
+                        return declared
+                    kind = agent.get("type")
+                    if kind == "claude":
+                        found = claude_session_model(agent.get("session-id"))
+                        if found:
+                            return found
+                    if kind == "codex":
+                        found = codex_observed_default()
+                        if found:
+                            return found + " (default)"
+                    if kind == "zai":
+                        return "glm-5.3 (default)"
+                    return None
 
                 def add(ident, kind, state, when, quiet=None):
                     if ident and ident not in seen:
