@@ -141,6 +141,18 @@
   #backlog .sec { color: var(--fg); margin-top: 3px; }
   #backlog .item { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   #backlog .id { color: var(--fg); }
+  /* --- usage strip: weekly subscription headroom, one line, always visible --- */
+  #usage { font-family: ui-monospace, Menlo, monospace; font-size: 11.5px; color: var(--dim);
+           margin: -4px 0 10px; line-height: 1.4; overflow-x: auto; white-space: nowrap;
+           cursor: pointer; user-select: none; -webkit-user-select: none; }
+  #usage .p { margin-right: 12px; }
+  #usage .n { color: var(--fg); }
+  /* Three bands, because the number only matters as "can I keep working".
+     amber below 35% left, red below 15%. */
+  #usage .warn { color: var(--accent, #d48700); }
+  #usage .crit { color: #d44; font-weight: 600; }
+  #usage .err  { color: #d44; }
+  #usage .sec  { color: var(--dim); margin-top: 3px; white-space: normal; }
   #agents:empty::before { content: "nothing invoking"; color: var(--dim); font-style: italic; font-size: 12.5px; }
   .ag { border: 1px solid var(--line); background: var(--panel); border-radius: 999px;
         min-height: 44px; padding: 8px 14px; white-space: nowrap; color: var(--dim);
@@ -825,6 +837,67 @@ function refreshBacklog() {
 }
 refreshBacklog();
 setInterval(refreshBacklog, 20000);
+
+const usageEl = $('#usage');
+let usageData = null, usageExpanded = false;
+
+// Order is fixed rather than object order so the strip never reshuffles under
+// the eye; the label is what Joe calls each subscription, not the vendor name.
+const USAGE_PROVIDERS = [['claude', 'claude'], ['codex', 'codex'], ['zai', 'zai']];
+
+function usageWhen(sec) {
+  if (!sec) return '';
+  const h = (sec * 1000 - Date.now()) / 3600000;
+  if (h < 0) return 'due';
+  if (h < 48) return h.toFixed(0) + 'h';
+  return (h / 24).toFixed(0) + 'd';
+}
+
+function renderUsage() {
+  if (!usageData || !usageData.ok) { usageEl.innerHTML = '<span class="err">usage unavailable</span>'; return; }
+  const out = [];
+  for (const [key, label] of USAGE_PROVIDERS) {
+    const p = usageData.providers[key] || {};
+    if (p.weekly_left_pct == null) {
+      // An unreadable provider says so. Showing nothing here would read as
+      // "fine", which is the exact false reassurance this strip exists to kill.
+      out.push(`<span class="p">${label} <span class="err">?</span></span>`);
+      continue;
+    }
+    const left = p.weekly_left_pct;
+    const cls = left < 15 ? 'crit' : (left < 35 ? 'warn' : 'n');
+    const when = usageWhen(p.weekly_resets_at);
+    out.push(`<span class="p">${label} <span class="${cls}">${left}%</span>` +
+             (when ? ` <span class="dim">${when}</span>` : '') + '</span>');
+  }
+  let html = '<span class="strip">' + out.join('') + '</span>';
+  if (usageExpanded) {
+    const rows = [];
+    for (const [key, label] of USAGE_PROVIDERS) {
+      const p = usageData.providers[key] || {};
+      if (p.error) { rows.push(`${label}: <span class="err">${p.error}</span>`); continue; }
+      const bits = [`weekly ${p.weekly_left_pct}% left`];
+      if (p.session_used_pct != null) bits.push(`session ${(100 - p.session_used_pct).toFixed(0)}% left`);
+      if (p.plan) bits.push(`plan ${p.plan}`);
+      if (p.reset_credits) bits.push(`${p.reset_credits} reset credit(s)`);
+      const r = p.weekly_resets_at;
+      if (r) bits.push('resets ' + new Date(r * 1000).toLocaleString());
+      rows.push(`${label}: ${bits.join(' \u00b7 ')}`);
+    }
+    html += '<div class="sec">' + rows.join('<br>') + '</div>';
+  }
+  usageEl.innerHTML = html;
+}
+usageEl.addEventListener('click', () => { usageExpanded = !usageExpanded; renderUsage(); });
+function refreshUsage() {
+  return fetch('usage', { cache: 'no-store' })
+    .then(r => r.ok ? r.json() : { ok: false })
+    .catch(() => ({ ok: false }))
+    .then(d => { usageData = d; renderUsage(); });
+}
+refreshUsage();
+// Weekly numbers move slowly; the server caches for 120 s anyway.
+setInterval(refreshUsage, 300000);
 
 const setStatus = t => statusEl.textContent = t;
 

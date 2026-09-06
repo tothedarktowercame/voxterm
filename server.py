@@ -1905,6 +1905,15 @@ class Handler(BaseHTTPRequestHandler):
             if item:
                 body.update(item)
             self._send(200, json.dumps(body), "application/json")
+        elif path == "/usage":
+            # Weekly subscription headroom. Cached (USAGE_TTL_S) because the
+            # codex leg spawns a process; the numbers move slowly enough that a
+            # two-minute-old reading is still an honest one.
+            try:
+                self._send(200, json.dumps(collect_usage()), "application/json")
+            except Exception as e:  # noqa: BLE001
+                self._send(200, json.dumps({"ok": False, "error": str(e)}),
+                           "application/json")
         elif path == "/agency/runtimes":
             runtimes = []
             for runtime, spec in AGENT_RUNTIMES.items():
