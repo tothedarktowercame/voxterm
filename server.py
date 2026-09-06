@@ -1611,8 +1611,17 @@ def apm_status():
     waiting_substrate = ":status :awaiting-substrate" in _apm_read(
         os.path.join(cdir, "coordinator.edn"), tail=6000)
 
+    # The systematic brake (three consecutive identical role-terminal parks
+    # or voids) stops the whole queue; that is a red state in its own right,
+    # not a slow-burning stall.
+    systematic = ":failed-systematic-frame-failure" in _apm_read(
+        os.path.join(cdir, "queue-state.edn"))
+
     state, alert = "ok", None
-    if last_type == "frame/stopped":
+    if systematic:
+        state = "stopped"
+        alert = "QUEUE STOPPED: systematic frame failure (3x identical)"
+    elif last_type == "frame/stopped":
         reason = re.search(r":reason :([a-z-]+)", ledger[-6000:])
         inv = re.search(r":failed-invariants \[([^\]]*)\]", ledger[-6000:])
         state = "stopped"
