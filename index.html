@@ -117,6 +117,22 @@
   #procs .who { color: var(--fg); }
   #procs .hot { color: var(--accent, #d48700); }
   #procs .idle { opacity: 0.55; }
+  /* --- APM strip: is the frame loop actually moving? Red when stuck at a
+     terminal position (Joe, 2026-09-06). Same collapsed-line idiom as the
+     backlog. --- */
+  #apm { font-family: ui-monospace, Menlo, monospace; font-size: 11.5px; color: var(--dim);
+         margin: -4px 0 10px; line-height: 1.4; overflow-x: auto; }
+  #apm .strip { cursor: pointer; user-select: none; -webkit-user-select: none; }
+  #apm .n { color: var(--fg); }
+  #apm .ok { color: var(--ok); }
+  #apm .warn { color: var(--accent, #d48700); }
+  #apm .bad { color: #ff8a94; font-weight: 600; }
+  /* The red terminal position: the whole strip goes alarm-coloured, not just
+     a word, so it reads across the room. */
+  #apm .strip.alarm { border: 1px solid #7a2b33; background: #241014;
+                      border-radius: 8px; padding: 2px 7px; }
+  #apm .sec { color: var(--fg); margin-top: 3px; }
+  #apm .item { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   /* --- backlog panel: queued + needs-Joe, collapsed to one line by default --- */
   #backlog { font-family: ui-monospace, Menlo, monospace; font-size: 11.5px; color: var(--dim);
              margin: -4px 0 10px; line-height: 1.4; overflow-x: auto; }
@@ -167,6 +183,8 @@
 <main>
   <div id="agents"></div>
   <div id="procs"></div>
+  <div id="apm"></div>
+  <div id="usage">usage …</div>
   <div id="backlog"></div>
   <div id="newKinds" aria-label="create agent"></div>
   <div id="status">tap the button once to grant mic access</div>
@@ -661,6 +679,74 @@ function refreshProcs() {
 }
 refreshProcs();
 setInterval(refreshProcs, 7000);
+
+// --- APM strip: filesystem truth about the frame loop (server /apm/status).
+// One line, always visible; tap to expand. Red strip = stuck at a terminal
+// position; the WM build loop's assurance, for APM (Joe, 2026-09-06).
+const apmEl = $('#apm');
+let apmData = null, apmExpanded = false;
+function apmAge(s) {
+  if (s == null) return '?';
+  return s >= 3600 ? Math.floor(s / 3600) + 'h' + Math.floor((s % 3600) / 60) + 'm'
+       : s >= 60 ? Math.floor(s / 60) + 'm' : s + 's';
+}
+function renderApm() {
+  const d = apmData;
+  if (!d) { apmEl.innerHTML = ''; return; }
+  if (d.ok === false) {
+    apmEl.innerHTML = '<div class="strip alarm">' + (apmExpanded ? '▾' : '▸')
+      + ' APM: <span class="bad">status unreadable — ' + esc(d.error || '?')
+      + '</span></div>';
+    return;
+  }
+  const camp = String(d.campaign || '').replace('jit-all-open-', '');
+  const red = d.state === 'stopped' || d.state === 'stalled';
+  const bits = ['APM ' + esc(camp) + ' <span class="n">' + esc(d.frame || '—')
+                + '/' + esc(d.problem || '?') + '</span>'];
+  if (red) {
+    bits.push('<span class="bad">' + esc(d.alert || d.state) + '</span>');
+  } else if (d.state === 'waiting') {
+    bits.push('<span class="warn">' + esc(d.alert || 'waiting') + '</span>');
+  } else if (d.state === 'closed') {
+    bits.push('<span class="ok">closed</span> · next frame pending');
+  } else {
+    bits.push(esc(d.phase || '?'));
+    bits.push('<span class="ok">progress ' + apmAge(d.last_progress_s) + ' ago</span>');
+  }
+  const running = (d.jobs || []).map(j =>
+    '<span class="n">' + esc(j.agent) + '</span> ' + apmAge(j.for_s));
+  if (running.length && !red) bits.push(running.join(' · '));
+  const out = ['<div class="strip' + (red ? ' alarm' : '') + '">'
+               + (apmExpanded ? '▾' : '▸') + ' ' + bits.join(' · ') + '</div>'];
+  if (apmExpanded) {
+    const rows = [];
+    rows.push('watchdog: ' + esc(d.watchdog || 'no file')
+              + (d.valid_wait ? ' (valid external wait)' : '')
+              + ' · last write ' + apmAge(d.last_write_s) + ' ago');
+    if (d.cascade) rows.push('memory cascade: ' + esc(d.cascade));
+    if (running.length) rows.push('running: ' + running.join(' · '));
+    rows.push('banked this campaign: ' + (d.banked_count || 0)
+              + ((d.banked || []).length ? ' (' + d.banked.join(' ') + ')' : ''));
+    out.push('<div class="sec">' + rows.join('<br>') + '</div>');
+    (d.recent || []).forEach(r => {
+      const bad = /VOID|STOP/.test(r.end || '');
+      out.push('<div class="item"><span class="n">' + esc(r.frame) + '</span>/'
+               + esc(r.problem) + ' · '
+               + (bad ? '<span class="bad">' + esc(r.end) + '</span>' : esc(r.end))
+               + '</div>');
+    });
+  }
+  apmEl.innerHTML = out.join('\n');
+}
+apmEl.addEventListener('click', () => { apmExpanded = !apmExpanded; renderApm(); });
+function refreshApm() {
+  return fetch('apm/status', { cache: 'no-store' })
+    .then(r => r.ok ? r.json() : { ok: false, error: 'HTTP ' + r.status })
+    .catch(e => ({ ok: false, error: String(e) }))
+    .then(d => { apmData = d; renderApm(); });
+}
+refreshApm();
+setInterval(refreshApm, 15000);
 
 // Backlog: what is QUEUED and what NEEDS JOE. Chips and procs show work in
 // progress; this shows the boards -- queued rows, blocked rows and what they

@@ -1397,6 +1397,458 @@ def agency_backlog():
             "proposals": proposals, "bulletin": latest_bulletin()}
 
 
+# ---------------------------------------------------------------------------
+# APM loop visibility (Joe, 2026-09-06: "I've never had the assurance that I
+# get from the WM build loop that this APM system is actually running ... it
+# might be nice to have an APM build loop that was surfacing with some kind of
+# red terminal error message, so I would visually know we're at a stuck
+# terminal position").
+#
+# FILESYSTEM TRUTH, not the Agency. The frame ledgers, live/ receipts and the
+# watchdog file are written by the coordinator as it works, so they answer
+# "is anything happening?" even when the JVM or the jobs feed is down — which
+# is exactly when the question matters most. The jobs feed is consulted only
+# to decorate the strip with which fNN-role job is executing right now; its
+# failure downgrades the strip, never blanks it.
+#
+# Why the chips alone were not enough: an fNN-role chip exists only while a
+# role job is executing. Between phases (coordinator ticks, the ~4-minute
+# memory-cascade expansion, promotion review) there is no job, so a healthy
+# loop reads as silence — and a wedged loop reads exactly the same.
+APM_ROOT = os.path.expanduser(
+    os.environ.get("VOXTERM_APM_DIR", "~/code/futon3c/data/apm-campaigns"))
+# No semantic progress AND no declared external wait for this long => stalled.
+# Phase medians run 10-40 min (TN-apm-unattended-progress-contract), so 25 min
+# of *unexplained* silence is meaningful; explained waits don't trip this.
+APM_STALL_S = int(os.environ.get("VOXTERM_APM_STALL_S", "1500"))
+# The watchdog writes an observation every couple of minutes; ten minutes of
+# watchdog silence means the loop's own supervisor is gone, which is red
+# regardless of what the ledger says.
+APM_WATCHDOG_SILENT_S = int(os.environ.get("VOXTERM_APM_WATCHDOG_SILENT_S", "600"))
+
+
+def _apm_read(path, head=0, tail=0):
+    """Bounded read: whole file, first `head` bytes, or last `tail` bytes."""
+    try:
+        with open(path, "r", errors="replace") as f:
+            if tail:
+                f.seek(0, os.SEEK_END)
+                size = f.tell()
+                f.seek(max(0, size - tail))
+                return f.read()
+            if head:
+                return f.read(head)
+            return f.read()
+    except OSError:
+        return ""
+
+
+def _apm_epoch(iso):
+    """EDN :event/at (nanosecond ISO, Z suffix) -> epoch seconds, or None."""
+    if not iso:
+        return None
+    try:
+        from datetime import datetime
+        trimmed = re.sub(r"(\.\d{1,6})\d*", r"\1", iso).replace("Z", "+00:00")
+        return datetime.fromisoformat(trimmed).timestamp()
+    except ValueError:
+        return None
+
+
+def _apm_newest_mtime(dirpath):
+    newest = None
+    try:
+        for name in os.listdir(dirpath):
+            p = os.path.join(dirpath, name)
+            try:
+                m = os.path.getmtime(p)
+            except OSError:
+                continue
+            if newest is None or m > newest:
+                newest = m
+    except OSError:
+        pass
+    return newest
+
+
+def _apm_active_campaign():
+    """The campaign dir most recently touched by its coordinator."""
+    best, best_m = None, None
+    try:
+        entries = os.listdir(APM_ROOT)
+    except OSError:
+        return None
+    # NOT the watchdog file: the watchdog sweeps every campaign's watchdog
+    # file on each pass (all three carried 15:25 stamps on 2026-09-06), so
+    # its mtime says "watchdog alive", not "this campaign is the live one".
+    for name in entries:
+        cdir = os.path.join(APM_ROOT, name)
+        for probe in ("coordinator.edn", "queue-state.edn"):
+            try:
+                m = os.path.getmtime(os.path.join(cdir, probe))
+            except OSError:
+                continue
+            if best_m is None or m > best_m:
+                best, best_m = name, m
+    return best
+
+
+def _apm_frame_dirs(cdir, campaign):
+    frames = []
+    try:
+        for name in os.listdir(cdir):
+            m = re.fullmatch(re.escape(campaign) + r"-f(\d+)", name)
+            if m and os.path.isdir(os.path.join(cdir, name)):
+                frames.append((int(m.group(1)), os.path.join(cdir, name)))
+    except OSError:
+        pass
+    return sorted(frames)
+
+
+def _apm_frame_brief(num, fdir):
+    """History row from bounded reads: the problem and how the frame ended."""
+    # Single events run to tens of KB (an :event/body carries whole
+    # certificates), so a small tail can miss every :event/type.
+    head = _apm_read(os.path.join(fdir, "ledger.edn"), head=3000)
+    tail = _apm_read(os.path.join(fdir, "ledger.edn"), tail=60000)
+    prob = re.search(r':problem-id "([^"]+)"', head)
+    types = re.findall(r":event/type :([a-z/-]+)", tail)
+    last = types[-1] if types else None
+    end = last or "?"
+    if last == "frame/stopped":
+        reason = re.search(r":reason :([a-z-]+)", tail)
+        end = "VOID " + (reason.group(1) if reason else "?")
+    elif last == "frame/closed":
+        end = "closed+banked" if _apm_banked(fdir) else "closed"
+    elif last == "frame/opened":
+        end = "shell (never ran)"
+    elif last == "frame/advanced":
+        trans = re.findall(r":from :[a-z0-9-]+, :to :([a-z0-9-]+)", tail)
+        end = "parked@" + (trans[-1] if trans else "?")
+    return {"frame": "f%d" % num,
+            "problem": prob.group(1) if prob else "?",
+            "end": end}
+
+
+def _apm_banked(fdir):
+    """Closed-and-banked, not just possessing a terminal/ dir: voided frames
+    write a frame-void certificate there too (f82, f105, ... 2026-09-06)."""
+    head = _apm_read(os.path.join(fdir, "terminal", "frame-terminal.edn"),
+                     head=2000)
+    return ":frame/result :closed" in head
+
+
+def _apm_running_jobs():
+    """fNN-role jobs currently executing, per the Agency feed. Best effort.
+
+    The feed's ?state= filter returns stale rows (finished solver jobs came
+    back under state=running, 2026-09-06; same unreliability noted for the
+    state filter on 08-30), so fetch unfiltered and judge each row's own
+    state field."""
+    jobs = []
+    try:
+        with urlopen("http://127.0.0.1:7070/api/alpha/invoke/jobs?limit=120",
+                     timeout=2.5) as r:
+            feed = json.load(r)
+        for j in feed.get("jobs", []):
+            agent = str(j.get("agent-id") or "")
+            if (j.get("state") == "running" and not j.get("finished-at")
+                    and re.fullmatch(r"f\d+-[a-z-]+", agent)):
+                started = j.get("started-at") or j.get("created-at")
+                at = _apm_epoch(started)
+                jobs.append({"agent": agent,
+                             "for_s": int(time.time() - at) if at else None})
+    except Exception:  # noqa: BLE001 — decoration only, never the verdict
+        return None
+    return jobs
+
+
+def apm_status():
+    now = time.time()
+    campaign = _apm_active_campaign()
+    if not campaign:
+        return {"ok": False, "error": "no campaign dirs under " + APM_ROOT}
+    cdir = os.path.join(APM_ROOT, campaign)
+    frames = _apm_frame_dirs(cdir, campaign)
+    if not frames:
+        return {"ok": True, "campaign": campaign, "state": "idle",
+                "alert": None, "detail": "campaign has no frames yet",
+                "recent": [], "jobs": _apm_running_jobs()}
+    num, fdir = frames[-1]
+    ledger = _apm_read(os.path.join(fdir, "ledger.edn"))
+
+    prob = re.search(r':problem-id "([^"]+)"', ledger)
+    problem = prob.group(1) if prob else "?"
+    types = re.findall(r":event/type :([a-z/-]+)", ledger)
+    last_type = types[-1] if types else None
+    ats = re.findall(r':event/at "([^"]+)"', ledger)
+    last_event = _apm_epoch(ats[-1]) if ats else None
+    trans = re.findall(r":from :[a-z0-9-]+, :to :([a-z0-9-]+)", ledger)
+    phase = trans[-1] if trans else (
+        "preflight" if last_type in ("frame/opened", "frame/advanced") else "?")
+
+    # Freshest write anywhere in the frame: live/ receipts land mid-phase,
+    # so this moves when the ledger doesn't.
+    live_m = _apm_newest_mtime(os.path.join(fdir, "live"))
+    activity = max(x for x in [last_event, live_m, 0] if x is not None)
+
+    wd = _apm_read(os.path.join(cdir, "coordinator.edn.watchdog.edn"))
+    wd_status_m = re.search(r":watchdog/status :([a-z-]+)", wd)
+    wd_status = wd_status_m.group(1) if wd_status_m else None
+    wd_progress = re.search(r":watchdog/last-progress-ms (\d+)", wd)
+    wd_observed = re.search(r":watchdog/observed-at-ms (\d+)", wd)
+    wd_valid_wait = ":valid-external-wait? true" in wd
+    wd_violation = ":first-violation-recorded? true" in wd
+    wd_disabled = ":coordinator-disabled? true" in wd
+    observed_s = (now - int(wd_observed.group(1)) / 1000.0) if wd_observed else None
+    progress_s = (now - int(wd_progress.group(1)) / 1000.0) if wd_progress else \
+        (now - activity if activity else None)
+
+    # The substrate-wait state (commit d6beeec0): the queue holds instead of
+    # churning when a provider limit is hit. Must match an actual :status
+    # assignment — the bare keyword also appears in every tick's
+    # :status/one-of postcondition vocabulary.
+    waiting_substrate = ":status :awaiting-substrate" in _apm_read(
+        os.path.join(cdir, "coordinator.edn"), tail=6000)
+
+    state, alert = "ok", None
+    if last_type == "frame/stopped":
+        reason = re.search(r":reason :([a-z-]+)", ledger[-6000:])
+        inv = re.search(r":failed-invariants \[([^\]]*)\]", ledger[-6000:])
+        state = "stopped"
+        alert = ("f%d STOPPED %s" % (num, reason.group(1) if reason else "?")
+                 + (" [" + inv.group(1).replace(":", "") + "]" if inv else ""))
+    elif waiting_substrate and (progress_s is None or progress_s > 300):
+        state = "waiting"
+        alert = "queue holding: substrate unavailable (provider limit?)"
+    elif wd and observed_s is not None and observed_s > APM_WATCHDOG_SILENT_S:
+        state = "stalled"
+        alert = "watchdog silent %dm — loop supervisor gone" % (observed_s // 60)
+    elif wd_disabled:
+        state = "stalled"
+        alert = "coordinator disabled"
+    elif wd_violation:
+        state = "stalled"
+        alert = "watchdog recorded a progress violation"
+    elif (progress_s is not None and progress_s > APM_STALL_S
+          and not wd_valid_wait):
+        state = "stalled"
+        alert = "no progress %dm and no declared wait" % (progress_s // 60)
+    elif last_type == "frame/closed":
+        state = "closed"
+
+    # Cascade expansion runs inside a tick with no job to watch; its own
+    # record says whether the quiet minutes are it.
+    cascade = None
+    cop = _apm_read(os.path.join(fdir, "live", "memory-cascade-operation.edn"))
+    if cop:
+        cst = re.search(r":status :([a-z-]+)", cop)
+        cascade = cst.group(1) if cst else None
+
+    recent = [_apm_frame_brief(n, d) for n, d in frames[-6:-1]][::-1]
+    banked = [n for n, d in frames if _apm_banked(d)]
+    return {"ok": True, "campaign": campaign, "frame": "f%d" % num,
+            "problem": problem, "phase": phase, "state": state, "alert": alert,
+            "last_progress_s": int(progress_s) if progress_s is not None else None,
+            "last_write_s": int(now - activity) if activity else None,
+            "watchdog": wd_status, "valid_wait": wd_valid_wait,
+            "cascade": cascade, "recent": recent,
+            "banked": ["f%d" % n for n in banked[-3:]],
+            "banked_count": len(banked),
+            "jobs": _apm_running_jobs()}
+
+
+# ---------------------------------------------------------------------------
+# Subscription usage (Joe, 2026-09-06: "it makes me a little nervous not
+# knowing how much percentage of usage I have left ... the weekly usage as a
+# percentage for each of the different subscriptions").
+#
+# WEEKLY IS THE NUMBER. Each provider also exposes a short rolling window
+# (Claude's 5-hour session, Zai's 5-hour pool) and those are carried along, but
+# the weekly figure is what the panel leads with, because it is the one you can
+# schedule around.
+#
+# THREE DIFFERENT MECHANISMS, none of which is documented together anywhere:
+#   claude — GET /api/oauth/usage on api.anthropic.com with the Claude Code
+#            OAuth access token. Returns `seven_day.utilization` as a percent.
+#   codex  — the Codex app-server's JSON-RPC method `account/rateLimits/read`
+#            over stdio. NOT an HTTP call: Codex learns its limits from turn
+#            responses, and this is the only read-only path that does not spend
+#            a turn. `windowDurationMins == 10080` is the weekly window.
+#   zai    — GET /api/monitor/usage/quota/limit on api.z.ai. Returns a `limits`
+#            list; `unit` is the window kind (3 = hour, 5 = month, 6 = week) and
+#            `percentage` is percent USED.
+#
+# EVERY FIELD BELOW WAS READ OFF A LIVE RESPONSE ON 2026-09-06, not inferred
+# from docs. The shapes are stable enough to parse defensively but not stable
+# enough to trust blindly, hence: one provider failing never blanks the others,
+# and a provider that cannot be read reports an ERROR STRING rather than a
+# number. A panel that shows "100%" because a token expired is worse than one
+# that shows "unreadable" -- it is exactly the false reassurance this feature
+# exists to remove.
+USAGE_TTL_S = float(os.environ.get("VOXTERM_USAGE_TTL", "120"))
+_usage_lock = threading.Lock()
+_usage_cache = {"at": 0.0, "data": None}
+
+
+def _usage_claude():
+    p = os.path.expanduser("~/.claude/.credentials.json")
+    with open(p) as f:
+        oauth = json.load(f)["claudeAiOauth"]
+    tok = oauth["accessToken"]
+    exp = oauth.get("expiresAt")
+    if exp and time.time() * 1000 > exp:
+        # Say so rather than firing a request that will 401: an expired token is
+        # a "run claude and it refreshes" problem, not an outage.
+        return {"error": "oauth token expired — start claude once to refresh"}
+    req = Request("https://api.anthropic.com/api/oauth/usage",
+                  headers={"Authorization": "Bearer " + tok,
+                           "anthropic-beta": "oauth-2025-04-20"})
+    with urlopen(req, timeout=15) as r:
+        d = json.load(r)
+    out = {"plan": oauth.get("subscriptionType"), "tier": oauth.get("rateLimitTier")}
+    wk, sess = d.get("seven_day") or {}, d.get("five_hour") or {}
+    if wk.get("utilization") is None:
+        return {"error": "no seven_day bucket in response"}
+    out["weekly_used_pct"] = float(wk["utilization"])
+    out["weekly_resets_at"] = wk.get("resets_at")
+    if sess.get("utilization") is not None:
+        out["session_used_pct"] = float(sess["utilization"])
+        out["session_resets_at"] = sess.get("resets_at")
+    return out
+
+
+def _usage_codex():
+    # stdio JSON-RPC. Spawning a process per poll is why USAGE_TTL_S exists.
+    proc = subprocess.Popen(
+        ["codex", "app-server"], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL, text=True, bufsize=1)
+    try:
+        for i, m in ((1, "initialize"), (2, "account/rateLimits/read")):
+            params = {"clientInfo": {"name": "voxterm-usage", "version": "1"}} if i == 1 else {}
+            proc.stdin.write(json.dumps({"jsonrpc": "2.0", "id": i, "method": m,
+                                         "params": params}) + "\n")
+        proc.stdin.flush()
+        result, deadline = None, time.time() + 30
+        while time.time() < deadline:
+            line = proc.stdout.readline()
+            if not line:
+                break
+            try:
+                msg = json.loads(line)
+            except ValueError:
+                continue
+            if msg.get("id") == 2:
+                result = msg.get("result")
+                break
+    finally:
+        proc.kill()
+    if not result:
+        return {"error": "no response from codex app-server"}
+    snap = result.get("rateLimits") or {}
+    out = {"plan": snap.get("planType")}
+    # The weekly window is identified by its DURATION, not its position: the
+    # `codex` bucket puts it in `primary` while the per-model buckets put a
+    # 5-hour window there and the week in `secondary`.
+    for slot in ("primary", "secondary"):
+        w = snap.get(slot) or {}
+        if w.get("windowDurationMins") == 10080:
+            out["weekly_used_pct"] = float(w.get("usedPercent", 0))
+            out["weekly_resets_at"] = w.get("resetsAt")
+        elif w.get("windowDurationMins"):
+            out["session_used_pct"] = float(w.get("usedPercent", 0))
+            out["session_resets_at"] = w.get("resetsAt")
+    if "weekly_used_pct" not in out:
+        return {"error": "no 10080-minute window in snapshot"}
+    credits = (result.get("rateLimitResetCredits") or {}).get("availableCount")
+    if credits:
+        out["reset_credits"] = credits
+    return out
+
+
+def _usage_zai():
+    key = None
+    for p in ("~/.zaikey", "~/.zai-key"):
+        try:
+            with open(os.path.expanduser(p)) as f:
+                key = f.read().strip()
+            break
+        except OSError:
+            continue
+    key = os.environ.get("ZAI_API_KEY") or key
+    if not key:
+        return {"error": "no ZAI_API_KEY / ~/.zai-key"}
+    req = Request("https://api.z.ai/api/monitor/usage/quota/limit",
+                  headers={"Authorization": "Bearer " + key})
+    with urlopen(req, timeout=15) as r:
+        d = json.load(r)
+    if not d.get("success"):
+        return {"error": "z.ai: " + str(d.get("msg"))}
+    data = d.get("data") or {}
+    out = {"plan": data.get("level")}
+    for lim in data.get("limits") or []:
+        unit, pct = lim.get("unit"), lim.get("percentage")
+        if pct is None:
+            continue
+        if unit == 6:                      # week
+            out["weekly_used_pct"] = float(pct)
+            out["weekly_resets_at"] = lim.get("nextResetTime")
+        elif unit == 3:                    # hour(s) — the 5-hour prompt pool
+            out["session_used_pct"] = float(pct)
+            out["session_resets_at"] = lim.get("nextResetTime")
+    if "weekly_used_pct" not in out:
+        return {"error": "no weekly (unit 6) limit in response"}
+    return out
+
+
+def _reset_epoch(v):
+    """Normalise a reset time to epoch SECONDS.
+
+    The three providers disagree: Claude returns an ISO-8601 string, Codex
+    epoch seconds, Zai epoch milliseconds. Normalising here rather than in the
+    browser means the panel has one format to render and the magnitude test
+    lives next to the evidence for it.
+    """
+    if v is None:
+        return None
+    if isinstance(v, str):
+        try:
+            import datetime as _dt
+            return _dt.datetime.fromisoformat(v).timestamp()
+        except ValueError:
+            return None
+    v = float(v)
+    # Milliseconds if it lands centuries in the future when read as seconds.
+    return v / 1000.0 if v > 1e11 else v
+
+
+def collect_usage():
+    """Weekly usage for every subscription. One provider's failure is its own."""
+    with _usage_lock:
+        now = time.time()
+        if _usage_cache["data"] and now - _usage_cache["at"] < USAGE_TTL_S:
+            return _usage_cache["data"]
+    providers = {}
+    for name, fn in (("claude", _usage_claude), ("codex", _usage_codex), ("zai", _usage_zai)):
+        t0 = time.time()
+        try:
+            providers[name] = fn()
+        except Exception as e:                      # noqa: BLE001 - report, never raise
+            providers[name] = {"error": "%s: %s" % (type(e).__name__, e)}
+        providers[name]["took_ms"] = int((time.time() - t0) * 1000)
+        # Derived once, here, so the browser never does percentage arithmetic:
+        # "left" is what Joe asked to see and the only place it should be computed.
+        if "weekly_used_pct" in providers[name]:
+            providers[name]["weekly_left_pct"] = round(100.0 - providers[name]["weekly_used_pct"], 1)
+        for k in ("weekly_resets_at", "session_resets_at"):
+            if k in providers[name]:
+                providers[name][k] = _reset_epoch(providers[name][k])
+    data = {"ok": True, "fetched_at": time.time(), "providers": providers}
+    with _usage_lock:
+        _usage_cache.update(at=time.time(), data=data)
+    return data
+
+
 class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
 
@@ -1670,6 +2122,14 @@ class Handler(BaseHTTPRequestHandler):
             except Exception as e:
                 self._send(200, json.dumps({"ok": False, "error": str(e),
                                             "agents": []}),
+                           "application/json")
+        elif path == "/apm/status":
+            # The APM strip: filesystem truth about the frame loop, red when
+            # it is stuck at a terminal position (Joe, 2026-09-06).
+            try:
+                self._send(200, json.dumps(apm_status()), "application/json")
+            except Exception as e:  # noqa: BLE001
+                self._send(200, json.dumps({"ok": False, "error": str(e)}),
                            "application/json")
         elif path == "/agency/backlog":
             try:
