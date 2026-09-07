@@ -120,19 +120,19 @@
   /* --- APM strip: is the frame loop actually moving? Red when stuck at a
      terminal position (Joe, 2026-09-06). Same collapsed-line idiom as the
      backlog. --- */
-  #apm { font-family: ui-monospace, Menlo, monospace; font-size: 11.5px; color: var(--dim);
+  #topo, #apm { font-family: ui-monospace, Menlo, monospace; font-size: 11.5px; color: var(--dim);
          margin: -4px 0 10px; line-height: 1.4; overflow-x: auto; }
-  #apm .strip { cursor: pointer; user-select: none; -webkit-user-select: none; }
-  #apm .n { color: var(--fg); }
-  #apm .ok { color: var(--ok); }
-  #apm .warn { color: var(--accent, #d48700); }
-  #apm .bad { color: #ff8a94; font-weight: 600; }
+  #topo, #apm .strip { cursor: pointer; user-select: none; -webkit-user-select: none; }
+  #topo, #apm .n { color: var(--fg); }
+  #topo, #apm .ok { color: var(--ok); }
+  #topo, #apm .warn { color: var(--accent, #d48700); }
+  #topo, #apm .bad { color: #ff8a94; font-weight: 600; }
   /* The red terminal position: the whole strip goes alarm-coloured, not just
      a word, so it reads across the room. */
-  #apm .strip.alarm { border: 1px solid #7a2b33; background: #241014;
+  #topo, #apm .strip.alarm { border: 1px solid #7a2b33; background: #241014;
                       border-radius: 8px; padding: 2px 7px; }
-  #apm .sec { color: var(--fg); margin-top: 3px; }
-  #apm .item { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #topo, #apm .sec { color: var(--fg); margin-top: 3px; }
+  #topo, #apm .item { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   /* --- backlog panel: queued + needs-Joe, collapsed to one line by default --- */
   #backlog { font-family: ui-monospace, Menlo, monospace; font-size: 11.5px; color: var(--dim);
              margin: -4px 0 10px; line-height: 1.4; overflow-x: auto; }
@@ -196,6 +196,7 @@
   <div id="agents"></div>
   <div id="procs"></div>
   <div id="apm"></div>
+  <div id="topo"></div>
   <div id="usage">usage …</div>
   <div id="backlog"></div>
   <div id="newKinds" aria-label="create agent"></div>
@@ -758,7 +759,75 @@ function refreshApm() {
     .then(d => { apmData = d; renderApm(); });
 }
 refreshApm();
+
+// --- Topology strip: filesystem truth about the topology build loop
+// (server /topology/status). Joe, 2026-09-06: "I can see the topology build
+// loop is running. But I don't see what it's actually doing. It's just Sleep
+// 20 topology contract". The loop blocks synchronously on one seat for up to
+// four hours per row, so a long `for` is normal; it is heartbeat silence that
+// means the supervisor itself has gone.
+const topoEl = $('#topo');
+let topoData = null, topoExpanded = false;
+function renderTopo() {
+  const d = topoData;
+  if (!d) { topoEl.innerHTML = ''; return; }
+  if (d.ok === false) {
+    topoEl.innerHTML = '<div class="strip alarm">' + (topoExpanded ? '▾' : '▸')
+      + ' TOPO: <span class="bad">status unreadable — ' + esc(d.error || '?')
+      + '</span></div>';
+    return;
+  }
+  const red = d.state === 'stopped' || d.state === 'stalled';
+  const bits = ['TOPO <span class="n">' + esc(d.row || '—') + '</span>'];
+  if (red) {
+    bits.push('<span class="bad">' + esc(d.alert || d.state) + '</span>');
+  } else if (d.state === 'idle') {
+    bits.push('<span class="warn">' + esc(d.alert || 'idle') + '</span>');
+  } else {
+    bits.push(esc(d.phase || '?') + (d.seat ? ' <span class="n">'
+              + esc(d.seat) + '</span>' : ''));
+    bits.push('for ' + apmAge(d.for_s));
+    bits.push('<span class="ok">beat ' + apmAge(d.heartbeat_s) + '</span>');
+  }
+  if (d.rows_total) bits.push(d.done + '/' + d.rows_total + ' done');
+  const out = ['<div class="strip' + (red ? ' alarm' : '') + '">'
+               + (topoExpanded ? '▾' : '▸') + ' ' + bits.join(' · ') + '</div>'];
+  if (topoExpanded) {
+    const st = Object.keys(d.states || {})
+      .map(k => k + ' ' + d.states[k]).join(' · ');
+    if (st) out.push('<div class="sec">worklist: ' + esc(st) + '</div>');
+    (d.recent || []).forEach(r => {
+      const bad = r.outcome !== 'pass';
+      out.push('<div class="item"><span class="n">' + esc(r.row) + '</span> · '
+               + (bad ? '<span class="bad">' + esc(r.outcome) + '</span>'
+                      : '<span class="ok">' + esc(r.outcome) + '</span>')
+               + '</div>');
+    });
+  }
+  topoEl.innerHTML = out.join('\n');
+}
+topoEl.addEventListener('click', () => { topoExpanded = !topoExpanded; renderTopo(); });
+function refreshTopo() {
+  return fetch('topology/status', { cache: 'no-store' })
+    .then(r => r.ok ? r.json() : { ok: false, error: 'HTTP ' + r.status })
+    .catch(e => ({ ok: false, error: String(e) }))
+    .then(d => { topoData = d; renderTopo(); });
+}
+refreshTopo();
 setInterval(refreshApm, 15000);
+setInterval(refreshTopo, 15000);
+
+// A hidden tab has its timers throttled or suspended outright -- on mobile
+// especially -- so both strips freeze on their last render and keep showing it
+// after the underlying state has changed. That is how a topology strip stayed
+// red for hours after the loop was repaired and running (Joe, 2026-09-07:
+// "there's still a red box ... so the red box is desynced"). Re-poll the moment
+// the page is visible again, so what is on screen is never older than the
+// glance that produced it.
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden) { refreshApm(); refreshTopo(); }
+});
+window.addEventListener('focus', () => { refreshApm(); refreshTopo(); });
 
 // Backlog: what is QUEUED and what NEEDS JOE. Chips and procs show work in
 // progress; this shows the boards -- queued rows, blocked rows and what they

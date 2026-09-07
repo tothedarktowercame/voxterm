@@ -1563,6 +1563,102 @@ def _apm_running_jobs():
     return jobs
 
 
+# Topology build-loop visibility (Joe, 2026-09-06: "I can see the topology
+# build loop is running. But I don't see what it's actually doing. It's just
+# Sleep 20 topology contract, which doesn't really inspire any confidence at
+# all").
+#
+# Same principle as the APM strip above: FILESYSTEM TRUTH. The supervisor
+# writes runs/inflight.edn when it dispatches a row and runs/heartbeat.edn
+# while it waits, so those two answer "what is it doing, and is it still
+# doing it?" without asking the Agency. The loop blocks synchronously on a
+# job for up to JOB_TIMEOUT (4h), so long silences are normal and only
+# heartbeat staleness is evidence of trouble.
+TOPO_LAB = os.path.expanduser(os.environ.get(
+    "VOXTERM_TOPO_DIR", "~/code/apm-lean/holes/labs/topology-contract"))
+# The supervisor polls every POLL_SECONDS (20) and rewrites the heartbeat each
+# time, so two minutes of heartbeat silence means the supervisor itself is gone
+# -- distinct from a seat simply taking a long time on one row.
+TOPO_SILENT_S = int(os.environ.get("VOXTERM_TOPO_SILENT_S", "120"))
+
+
+def _topo_edn_field(text, key, quoted=True):
+    m = re.search(r':%s\s+"([^"]*)"' % key, text) if quoted else \
+        re.search(r':%s\s+([^\s,}]+)' % key, text)
+    return m.group(1) if m else None
+
+
+def topology_status():
+    now = time.time()
+    runs = os.path.join(TOPO_LAB, "runs")
+    inflight = _apm_read(os.path.join(runs, "inflight.edn"))
+    heartbeat = _apm_read(os.path.join(runs, "heartbeat.edn"))
+    log = _apm_read(os.path.join(runs, "build-loop.log"), tail=20000)
+    worklist = _apm_read(os.path.join(TOPO_LAB, "worklist.edn"))
+
+    if not os.path.isdir(runs):
+        return {"ok": False, "error": "no topology lab at " + TOPO_LAB}
+
+    row = _topo_edn_field(inflight, "row")
+    seat = _topo_edn_field(inflight, "seat")
+    dispatched = _topo_edn_field(inflight, "dispatched-at")
+    hb_at = _topo_edn_field(heartbeat, "checked-at", quoted=False)
+
+    # Phase comes from the log's last work(...)/review(...) mention, which is
+    # the only place the supervisor names which half of the cycle it is in.
+    phases = re.findall(r"\] (work|review)\(([a-z0-9-]+)\)", log)
+    phase, log_row = (phases[-1] if phases else (None, None))
+    row = row or log_row
+
+    hb_age = None
+    if hb_at:
+        e = _apm_epoch(hb_at)
+        if e:
+            hb_age = int(now - e)
+    disp_age = None
+    if dispatched:
+        e = _apm_epoch(dispatched)
+        if e:
+            disp_age = int(now - e)
+
+    # Worklist states: take the checker's OWN authoritative line rather than
+    # re-parsing the ledger here. A naive ":state :x" regex over worklist.edn
+    # counts nested evidence maps too (39 states for a 21-item ledger), and a
+    # visibility strip that overstates progress is worse than none. The
+    # supervisor runs worklist_check.bb every iteration and logs
+    #   topology-worklist: 21 items OK; {:done 18, :open 1}
+    states, total = {}, 0
+    counts = re.findall(r"topology-worklist: (\d+) items OK; \{([^}]*)\}", log)
+    if counts:
+        total = int(counts[-1][0])
+        for k, v in re.findall(r":([a-z-]+) (\d+)", counts[-1][1]):
+            states[k] = int(v)
+
+    # Rows finished since the log began, newest last: "applied pass to X".
+    applied = re.findall(r"applied (pass|fail) to ([a-z0-9-]+)", log)
+    recent = [{"row": r, "outcome": o} for o, r in applied[-6:]]
+
+    stopped = ("PAUSED:" in log[-2000:]) or ("DONE:" in log[-2000:])
+    if hb_age is not None and hb_age > TOPO_SILENT_S and not stopped:
+        state, alert = "stalled", "supervisor silent %ds" % hb_age
+    elif stopped:
+        tail = log[-2000:]
+        m = re.search(r"(PAUSED|DONE): ([^\n]+)", tail)
+        state = "stopped"
+        alert = (m.group(1) + ": " + m.group(2)) if m else "supervisor exited"
+    elif row:
+        state, alert = "running", None
+    else:
+        state, alert = "idle", "no row dispatched"
+
+    return {"ok": True, "lab": os.path.basename(TOPO_LAB),
+            "row": row, "seat": seat, "phase": phase,
+            "state": state, "alert": alert,
+            "for_s": disp_age, "heartbeat_s": hb_age,
+            "states": states, "rows_total": total,
+            "done": states.get("done", 0), "recent": recent}
+
+
 def apm_status():
     now = time.time()
     campaign = _apm_active_campaign()
@@ -2140,6 +2236,13 @@ class Handler(BaseHTTPRequestHandler):
             except Exception as e:
                 self._send(200, json.dumps({"ok": False, "error": str(e),
                                             "agents": []}),
+                           "application/json")
+        elif path == "/topology/status":
+            try:
+                self._send(200, json.dumps(topology_status()),
+                           "application/json")
+            except Exception as e:
+                self._send(200, json.dumps({"ok": False, "error": str(e)}),
                            "application/json")
         elif path == "/apm/status":
             # The APM strip: filesystem truth about the frame loop, red when
