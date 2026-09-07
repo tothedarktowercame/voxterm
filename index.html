@@ -725,6 +725,17 @@ function renderApm() {
     bits.push('<span class="ok">closed</span> · next frame pending');
   } else {
     bits.push(esc(d.phase || '?'));
+    // "progress Nm ago" alone reads as a stall during a phase that is working
+    // hard and simply not moving anything a ledger notices. Lead with what the
+    // phase is actually doing when it says so.
+    const pd = d.phase_detail;
+    if (pd && pd.stage) {
+      const retrying = pd.retry_attempt != null && pd.retry_max != null;
+      bits.push('<span class="warn">' + esc(pd.stage) + '</span>'
+                + (retrying ? ' retry ' + esc(pd.retry_attempt) + '/' + esc(pd.retry_max) : '')
+                + (pd.retry_in_s != null && pd.retry_in_s > 0
+                     ? ' in ' + apmAge(pd.retry_in_s) : ''));
+    }
     bits.push('<span class="ok">progress ' + apmAge(d.last_progress_s) + ' ago</span>');
   }
   const running = (d.jobs || []).map(j =>
@@ -737,6 +748,21 @@ function renderApm() {
     rows.push('watchdog: ' + esc(d.watchdog || 'no file')
               + (d.valid_wait ? ' (valid external wait)' : '')
               + ' · last write ' + apmAge(d.last_write_s) + ' ago');
+    if (d.phase_detail && (d.phase_detail.error_code || d.phase_detail.error_message)) {
+      const pd = d.phase_detail;
+      rows.push('phase: <span class="bad">' + esc(pd.error_code || '?') + '</span>'
+                + (pd.error_message ? ' — ' + esc(pd.error_message) : '')
+                + (pd.repair_kind ? ' · repair ' + esc(pd.repair_kind) + ' '
+                                    + esc(pd.repair_attempts) + '/' + esc(pd.repair_max) : ''));
+    }
+    if (d.substrate) {
+      const sb = d.substrate, av = sb.available, tt = sb.total;
+      const sat = (av === 0 && tt);
+      rows.push('substrate: permits <span class="' + (sat ? 'bad' : 'ok') + '">'
+                + (av == null ? '?' : av) + '/' + (tt || '?') + ' free</span>'
+                + ' · ' + sb.holders + ' in flight'
+                + (sb.node_open ? '' : ' · <span class="bad">node closed</span>'));
+    }
     if (d.jvm) {
       const j = d.jvm, dm = j['direct-used-mb'], dx = j['direct-max-mb'];
       const pct = (dm != null && dx) ? Math.round(100 * dm / dx) : null;

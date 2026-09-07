@@ -1734,6 +1734,64 @@ def _jvm_health():
         return None
 
 
+def _apm_phase_detail(fdir, phase):
+    """What the CURRENT phase is doing, from its own live/<phase>.edn.
+
+    Joe, 2026-09-07: "right now it just says... Progress nine minutes ago, and
+    that makes me nervous when, in fact, it's actually working, doing something
+    useful." Elapsed-since-last-progress is a lagging measure: a phase can be
+    working hard for ten minutes and move nothing a ledger would notice. The
+    phase files carry the live detail -- stage, retry budget, and the finding
+    that caused the last failure -- so read that instead of inferring from
+    silence.
+    """
+    if not phase:
+        return None
+    raw = _apm_read(os.path.join(fdir, "live", phase + ".edn"), tail=20000)
+    if not raw:
+        return None
+    def field(k, quoted=False):
+        m = re.search(r':%s\s+"([^"]*)"' % k if quoted else r':%s\s+([^\s,}\]]+)' % k, raw)
+        return m.group(1) if m else None
+    stage = field("stage")
+    err = field(r"error/code")
+    att = field(r"transport-retry/attempt")
+    mx = field(r"transport-retry/max-attempts")
+    nb = field(r"transport-retry/not-before-ms")
+    rk = field(r"repair/kind")
+    ra = field(r"repair/attempts")
+    rm = field(r"repair/max-attempts")
+    msg = None
+    m = re.search(r':error/message "([^"]{0,120})"', raw)
+    if m:
+        msg = m.group(1)
+    retry_in = None
+    if nb and nb.isdigit():
+        retry_in = int((int(nb) - time.time() * 1000) / 1000)
+    return {"stage": stage, "error_code": err, "error_message": msg,
+            "retry_attempt": att, "retry_max": mx, "retry_in_s": retry_in,
+            "repair_kind": rk, "repair_attempts": ra, "repair_max": rm}
+
+
+def _substrate_permits():
+    """futon1b's concurrency gate. Two permits total; when both are held every
+    authoritative read queues, and the promotion's per-read bound is 5s. That
+    is what timed out f188's post-publication verification, with the direct
+    buffers healthy -- so a green JVM row alone would have been misleading."""
+    try:
+        with urlopen("http://127.0.0.1:7073/health", timeout=3) as r:
+            t = r.read().decode("utf-8", "replace")
+        tot = re.search(r':permits/total (\d+)', t)
+        avail = re.search(r':permits/available (\d+)', t)
+        holders = len(re.findall(r':age-ms (\d+)', t))
+        return {"total": int(tot.group(1)) if tot else None,
+                "available": int(avail.group(1)) if avail else None,
+                "holders": holders,
+                "node_open": ":node-open? true" in t}
+    except Exception:
+        return None
+
+
 def apm_status():
     now = time.time()
     campaign = _apm_active_campaign()
@@ -1845,6 +1903,8 @@ def apm_status():
             "last_write_s": int(now - activity) if activity else None,
             "watchdog": wd_status, "valid_wait": wd_valid_wait,
             "jvm": _jvm_health(),
+            "phase_detail": _apm_phase_detail(fdir, phase),
+            "substrate": _substrate_permits(),
             "cascade": cascade, "recent": recent,
             "banked": ["f%d" % n for n in banked[-3:]],
             "banked_count": len(banked),
