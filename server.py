@@ -1644,8 +1644,20 @@ def topology_status():
     # validation failed" is a real halt. Reporting either as "supervisor
     # silent" -- which is what this did on 2026-09-07 after a clean
     # MAX_ITER exit -- trains the operator to discount the strip.
-    tail = log[-2000:]
-    exited = re.search(r"(PAUSED|DONE|STOP): ([^\n]+)", tail)
+    tail = log[-4000:]
+    # Position matters: an exit line only means the loop is down if nothing
+    # happened AFTER it. A restarted supervisor leaves its predecessor's
+    # "STOP:" inside the same tail, and reading that as current would report a
+    # working loop as finished -- the mirror of the mistake being fixed here.
+    exits = list(re.finditer(r"(PAUSED|DONE|STOP): ([^\n]+)", tail))
+    activity = list(re.finditer(r"\] (work|review)\([a-z0-9-]+\) (dispatch|job|heartbeat|done)",
+                                tail))
+    last_exit = exits[-1] if exits else None
+    last_activity = activity[-1] if activity else None
+    exited = (last_exit
+              if last_exit and (not last_activity
+                                or last_exit.start() > last_activity.start())
+              else None)
     routine_exit = bool(exited and re.search(r"MAX_ITER|no open or unreviewed",
                                              exited.group(2)))
     if exited:
