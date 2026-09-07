@@ -737,6 +737,17 @@ function renderApm() {
     rows.push('watchdog: ' + esc(d.watchdog || 'no file')
               + (d.valid_wait ? ' (valid external wait)' : '')
               + ' · last write ' + apmAge(d.last_write_s) + ' ago');
+    if (d.jvm) {
+      const j = d.jvm, dm = j['direct-used-mb'], dx = j['direct-max-mb'];
+      const pct = (dm != null && dx) ? Math.round(100 * dm / dx) : null;
+      const cls = pct == null ? '' : pct >= 90 ? 'bad' : pct >= 70 ? 'warn' : 'ok';
+      rows.push('jvm: direct <span class="' + cls + '">' + (dm == null ? '?' : dm)
+                + '/' + (dx || '?') + ' MB'
+                + (pct == null ? '' : ' (' + pct + '%)') + '</span>'
+                + ' · ' + j['direct-count'] + ' buffers'
+                + ' · heap ' + j['heap-used-mb'] + '/' + j['heap-max-mb'] + ' MB'
+                + ' · up ' + apmAge(j['uptime-seconds']));
+    }
     if (d.cascade) rows.push('memory cascade: ' + esc(d.cascade));
     if (running.length) rows.push('running: ' + running.join(' · '));
     rows.push('banked this campaign: ' + (d.banked_count || 0)

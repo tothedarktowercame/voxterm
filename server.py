@@ -1041,6 +1041,16 @@ def _session_in(args):
     return m.group(0) if m else None
 
 
+def _seat_shaped(proc):
+    """A persistent agent seat, as opposed to a one-shot job the JVM spawned.
+    Both seat kinds are named by _short_cmd: a Claude seat is any `claude ...`
+    ("claude seat"), a Codex seat is `codex exec`. Codex's own workers are
+    children of the seat, never direct JVM children, so they cannot reach the
+    caller of this."""
+    cmd = proc.get("cmd") or ""
+    return cmd == "claude seat" or cmd.startswith("codex exec")
+
+
 def agency_procs():
     """{ok, jvm, agents:[{id, pid, start, tree:[...]}], unmatched:[...]}."""
     jvm = _agency_jvm_pid()
@@ -1144,8 +1154,11 @@ def agency_procs():
     # later). The durable key is the REGISTRY: an agent's `registered-at` is
     # stamped once, never expires, and the seat process starts within seconds
     # of it. Job created-at and invoke-started-at stay as additional
-    # candidates; this claims likely ownership without consuming the `used`
-    # set -- it names the seat, it does not assert a running turn. (Claude
+    # candidates; for a non-seat child this claims likely ownership without
+    # consuming the `used` set -- it names the seat, it does not assert a
+    # running turn. Path (5) below does consume it, but only for a seat-shaped
+    # child, where naming the seat and owning the name are the same claim.
+    # (Claude
     # seats carry no session id in argv -- it arrives over stdin -- and
     # /proc/<pid>/environ, checked 2026-09-04, holds no UUID either.)
     attr_candidates = []
@@ -1247,6 +1260,32 @@ def agency_procs():
                 ident, how = max(cands)[1], "cwd"
         if not ident and sole_role and c["elapsed"] < 120 and not sid:
             ident, how = sole_role, "sole-role-job"
+        # (5) registered-at, for a seat that never advertised a session id.
+        # A Claude seat carries `--resume <sid>` only once it has been RESUMED;
+        # a FRESH one is `claude --print --input-format stream-json ...` with no
+        # uuid in argv (nor in environ, checked 2026-09-04), so (1)-(4) all miss
+        # it and it stays in `unmatched` for its entire life. Two costs, both
+        # observed on claude-4, 2026-09-07:
+        #   - the panel printed a permanent "claude-4 (seat) ... up 32m12s"
+        #     line, because the unmatched renderer has no equivalent of the
+        #     busy() gate that hides an idle MATCHED seat -- so the rule "a
+        #     sleeping seat gets no line" was being applied to some seats only,
+        #     and the age shown was seat UPTIME read as a running turn, the
+        #     exact confusion index.html:646-655 was written to end;
+        #   - the agent never entered `used`, leaving it free for the +-20s
+        #     start-time window to hand it a stranger's process (`lake env
+        #     lean`, which belonged to f188-scribe).
+        # likely_owner is the right key and was already being computed for the
+        # unmatched row: a seat starts within seconds of a `registered-at` that
+        # is stamped once and never expires. Restricted to seat-shaped direct
+        # JVM children so a one-shot job cannot claim an agent this way, and it
+        # yields to every deterministic path above. `cand not in used` keeps two
+        # seats registered in one window from both answering to one name: the
+        # second stays unmatched, which is honest, rather than mislabelled.
+        if not ident and _seat_shaped(c):
+            cand = likely_owner(c["start"])
+            if cand and cand not in used:
+                ident, how = cand, "registered-at"
         tree = subtree(child, 0, [14])
         if ident:
             if how != "sole-role-job":
@@ -1678,6 +1717,23 @@ def topology_status():
             "done": states.get("done", 0), "recent": recent}
 
 
+def _jvm_health():
+    """The JVM's own memory, from the Agency's O(1) /health block.
+
+    A long APM phase runs IN-PROCESS: the regulator claims a tick, dispatches
+    no job, and the watchdog goes quiet because there is nothing external to
+    observe. That is indistinguishable from a wedge unless you can see inside.
+    On 2026-09-07 this JVM ate 4095 MB of a 4096 MB direct-buffer limit over
+    8.8 days and the first symptom was the campaign halting; the exhaustion
+    itself was never on screen. It is now.
+    """
+    try:
+        with urlopen("http://127.0.0.1:7070/health", timeout=3) as r:
+            return (json.loads(r.read().decode("utf-8")) or {}).get("jvm")
+    except Exception:
+        return None
+
+
 def apm_status():
     now = time.time()
     campaign = _apm_active_campaign()
@@ -1712,7 +1768,13 @@ def apm_status():
     wd_status = wd_status_m.group(1) if wd_status_m else None
     wd_progress = re.search(r":watchdog/last-progress-ms (\d+)", wd)
     wd_observed = re.search(r":watchdog/observed-at-ms (\d+)", wd)
-    wd_valid_wait = ":valid-external-wait? true" in wd
+    # This flag lives INSIDE :watchdog/trace-observation, not as a
+    # :watchdog/ key -- it is the watchdog's own verdict that the current wait
+    # is legitimate, and it is what suppresses the stall alarm. Scope the match
+    # to that map rather than the whole file, so an identically-named field
+    # appearing anywhere else cannot silence a real stall.
+    _trace = re.search(r":watchdog/trace-observation \{([^}]*)\}", wd)
+    wd_valid_wait = bool(_trace and ":valid-external-wait? true" in _trace.group(1))
     wd_violation = ":first-violation-recorded? true" in wd
     wd_disabled = ":coordinator-disabled? true" in wd
     observed_s = (now - int(wd_observed.group(1)) / 1000.0) if wd_observed else None
@@ -1782,6 +1844,7 @@ def apm_status():
             "last_progress_s": int(progress_s) if progress_s is not None else None,
             "last_write_s": int(now - activity) if activity else None,
             "watchdog": wd_status, "valid_wait": wd_valid_wait,
+            "jvm": _jvm_health(),
             "cascade": cascade, "recent": recent,
             "banked": ["f%d" % n for n in banked[-3:]],
             "banked_count": len(banked),
