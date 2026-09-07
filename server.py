@@ -1185,9 +1185,22 @@ def agency_procs():
         if (t, ident) not in attr_candidates:
             attr_candidates.append((t, ident))
 
+    def known_agent(ident):
+        """An id only if the registry still knows it.
+
+        Naming a DEPARTED agent is worse than naming none. "Unattributed" is a
+        gap and reads as one; an ex-agent is a fiction, and it sends someone
+        looking for a process nobody is running. Both remaining attribution
+        sources can serve one: the rolling job window outlives the roster, and
+        the session cache below never expires.
+        """
+        return ident if ident in info else None
+
     def likely_owner(child_start):
         best = None
         for t, cand in attr_candidates:
+            if not known_agent(cand):
+                continue
             d = child_start - t
             if -5 <= d <= 20 and (best is None or abs(d) < best[0]):
                 best = (abs(d), cand)
@@ -1196,8 +1209,26 @@ def agency_procs():
     _SESSION_OWNERS.update(by_session)
 
     def owner_of_session(sid):
-        """The agent a `--resume <sid>` seat belongs to, registry first."""
-        return by_session.get(sid) or _SESSION_OWNERS.get(sid)
+        """The agent a `--resume <sid>` seat belongs to, registry first.
+
+        The cache exists so that a registry which briefly loses an agent, or
+        omits its session-id while it re-registers, does not strand that seat
+        as unattributed for the frame. Its premise is that session ids are
+        immutable and never reassigned -- true of the SESSION, but not of who
+        owns it. An agent id can be retired while its session is taken over by
+        another, and then the cached name is simply wrong and never corrected.
+
+        2026-09-07: the panel showed "claude-10" running
+        /tmp/f10-unblock-watch.sh. claude-10 was in neither the roster nor the
+        job window; the seat's `--resume b2de8138` session belongs to claude-1,
+        which had taken it over. The process was real and correctly attributed
+        to a live seat by every other path -- only the cached name was stale.
+
+        So the cache may answer only for an agent the registry still knows.
+        Otherwise fall through and let the other matchers speak, or leave the
+        row unattributed, which is the honest answer.
+        """
+        return by_session.get(sid) or known_agent(_SESSION_OWNERS.get(sid))
 
     rows, unmatched, used = [], [], set()
     # The unattended build loop (futon2 wm-build-loop.sh) runs OUTSIDE the
