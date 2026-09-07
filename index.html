@@ -122,17 +122,17 @@
      backlog. --- */
   #topo, #apm { font-family: ui-monospace, Menlo, monospace; font-size: 11.5px; color: var(--dim);
          margin: -4px 0 10px; line-height: 1.4; overflow-x: auto; }
-  #topo, #apm .strip { cursor: pointer; user-select: none; -webkit-user-select: none; }
-  #topo, #apm .n { color: var(--fg); }
-  #topo, #apm .ok { color: var(--ok); }
-  #topo, #apm .warn { color: var(--accent, #d48700); }
-  #topo, #apm .bad { color: #ff8a94; font-weight: 600; }
+  #topo .strip, #apm .strip { cursor: pointer; user-select: none; -webkit-user-select: none; }
+  #topo .n, #apm .n { color: var(--fg); }
+  #topo .ok, #apm .ok { color: var(--ok); }
+  #topo .warn, #apm .warn { color: var(--accent, #d48700); }
+  #topo .bad, #apm .bad { color: #ff8a94; font-weight: 600; }
   /* The red terminal position: the whole strip goes alarm-coloured, not just
      a word, so it reads across the room. */
-  #topo, #apm .strip.alarm { border: 1px solid #7a2b33; background: #241014;
+  #topo .strip.alarm, #apm .strip.alarm { border: 1px solid #7a2b33; background: #241014;
                       border-radius: 8px; padding: 2px 7px; }
-  #topo, #apm .sec { color: var(--fg); margin-top: 3px; }
-  #topo, #apm .item { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #topo .sec, #apm .sec { color: var(--fg); margin-top: 3px; }
+  #topo .item, #apm .item { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   /* --- backlog panel: queued + needs-Joe, collapsed to one line by default --- */
   #backlog { font-family: ui-monospace, Menlo, monospace; font-size: 11.5px; color: var(--dim);
              margin: -4px 0 10px; line-height: 1.4; overflow-x: auto; }
