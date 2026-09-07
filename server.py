@@ -1638,14 +1638,21 @@ def topology_status():
     applied = re.findall(r"applied (pass|fail) to ([a-z0-9-]+)", log)
     recent = [{"row": r, "outcome": o} for o, r in applied[-6:]]
 
-    stopped = ("PAUSED:" in log[-2000:]) or ("DONE:" in log[-2000:])
-    if hb_age is not None and hb_age > TOPO_SILENT_S and not stopped:
+    # The supervisor announces every deliberate exit on its last log line, and
+    # they are NOT all alarming: "STOP: MAX_ITER=60 exhausted" means it ran its
+    # whole budget and finished, which is routine, while "STOP: ledger
+    # validation failed" is a real halt. Reporting either as "supervisor
+    # silent" -- which is what this did on 2026-09-07 after a clean
+    # MAX_ITER exit -- trains the operator to discount the strip.
+    tail = log[-2000:]
+    exited = re.search(r"(PAUSED|DONE|STOP): ([^\n]+)", tail)
+    routine_exit = bool(exited and re.search(r"MAX_ITER|no open or unreviewed",
+                                             exited.group(2)))
+    if exited:
+        state = "finished" if routine_exit else "stopped"
+        alert = exited.group(1) + ": " + exited.group(2).strip()
+    elif hb_age is not None and hb_age > TOPO_SILENT_S:
         state, alert = "stalled", "supervisor silent %ds" % hb_age
-    elif stopped:
-        tail = log[-2000:]
-        m = re.search(r"(PAUSED|DONE): ([^\n]+)", tail)
-        state = "stopped"
-        alert = (m.group(1) + ": " + m.group(2)) if m else "supervisor exited"
     elif row:
         state, alert = "running", None
     else:
@@ -1749,6 +1756,12 @@ def apm_status():
     if cop:
         cst = re.search(r":status :([a-z-]+)", cop)
         cascade = cst.group(1) if cst else None
+    # A dead cascade doesn't stall the frame, but the student then runs with
+    # no served memory: the frame measures a dead transport, not a memory
+    # effect (f187, 2026-09-07). That's an alarm even while phases advance.
+    if cascade == "failed" and state == "ok":
+        state = "degraded"
+        alert = "cascade failed: frame is running WITHOUT served memory"
 
     recent = [_apm_frame_brief(n, d) for n, d in frames[-6:-1]][::-1]
     banked = [n for n, d in frames if _apm_banked(d)]

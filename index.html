@@ -713,11 +713,12 @@ function renderApm() {
     return;
   }
   const camp = String(d.campaign || '').replace('jit-all-open-', '');
-  const red = d.state === 'stopped' || d.state === 'stalled';
+  const red = d.state === 'stopped' || d.state === 'stalled' || d.state === 'degraded';
   const bits = ['APM ' + esc(camp) + ' <span class="n">' + esc(d.frame || '—')
                 + '/' + esc(d.problem || '?') + '</span>'];
   if (red) {
     bits.push('<span class="bad">' + esc(d.alert || d.state) + '</span>');
+    if (d.state === 'degraded') bits.push(esc(d.phase || '?'));
   } else if (d.state === 'waiting') {
     bits.push('<span class="warn">' + esc(d.alert || 'waiting') + '</span>');
   } else if (d.state === 'closed') {
