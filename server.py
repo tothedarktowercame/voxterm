@@ -2069,6 +2069,26 @@ def apm_status():
     systematic = ":failed-systematic-frame-failure" in _apm_read(
         os.path.join(cdir, "queue-state.edn"))
 
+    # A watchdog HALT disables the durable coordinator, and the watchdog state
+    # file is then overwritten wholesale on the next watching cycle -- so once
+    # it recovers, every trace of the halt is gone except the rearm journal.
+    # Joe saw "coordinator disabled" and by the time it was investigated there
+    # was nothing left to look at; the halt could not even be dated. A
+    # self-healing fault that leaves no record is one nobody can act on, so
+    # recent rearms ride alongside the state rather than inside it.
+    rearms = []
+    try:
+        rearm_text = _apm_read(
+            os.path.join(cdir, "coordinator.edn.watchdog-rearms.edn"), tail=20000)
+        for m in re.finditer(r":watchdog/rearm-attempts-ms \[([^\]]*)\]", rearm_text):
+            for ms in re.findall(r"\d+", m.group(1)):
+                age = now - int(ms) / 1000.0
+                if 0 <= age <= 21600:            # six hours
+                    rearms.append({"at_ms": int(ms), "age_s": int(age)})
+    except Exception:
+        pass
+    rearms.sort(key=lambda r: r["at_ms"])
+
     state, alert = "ok", None
     if systematic:
         state = "stopped"
@@ -2137,6 +2157,7 @@ def apm_status():
             "banked": ["f%d" % n for n in banked[-3:]],
             "banked_count": len(banked),
             "parked_decisions": parked,
+            "coordinator_rearms": rearms,
             "jobs": _apm_running_jobs()}
 
 

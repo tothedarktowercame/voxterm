@@ -735,6 +735,19 @@ function renderApm() {
   // sitting unseen on 2026-09-07, one of them a refuted statement that had
   // already cost f190 29 solver rounds (Joe: "why is it that we are finding
   // errors, parking them, and then not fixing the actual underlying errors").
+  // A watchdog halt disables the coordinator and then erases itself: the state
+  // file is rewritten on the next watching cycle, so a halt that recovered
+  // leaves no trace on the strip at all. Joe reported one and by the time it
+  // was looked at there was nothing to see. Show recent rearms so a
+  // self-healing fault is still legible after it heals.
+  const rearms = d.coordinator_rearms || [];
+  if (rearms.length && d.state !== 'stalled') {
+    const last = rearms[rearms.length - 1];
+    const when = new Date(last.at_ms).toISOString().slice(11, 16);
+    bits.push('<span class="warn">coordinator halted ' + esc(when)
+              + 'Z, rearmed</span>' + (rearms.length > 1
+                ? ' \u00d7' + rearms.length : ''));
+  }
   const parked = d.parked_decisions || [];
   if (parked.length) {
     bits.push('<span class="warn">' + parked.length + ' parked: '
