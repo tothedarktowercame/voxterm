@@ -1734,6 +1734,59 @@ def _jvm_health():
         return None
 
 
+def _apm_frame_timeline(fdir, campaign, frame):
+    """The frame as a sequence of phases with durations, each linked to the
+    agent turn that ran it -- or named as in-process work when no agent did.
+
+    Joe, 2026-09-07: "how student attempt one relates to the F188 student ...
+    is not obvious looking at the system ... I just don't have any real
+    visibility into the things that aren't specifically agent interactions
+    inside of the loop."
+
+    The strip showed a phase name, and the agent list separately showed a job,
+    with nothing connecting them and nothing at all for the stretches between
+    agent turns -- which is where a frame spends much of its time (f188's
+    memory cascade alone ran 8m11s with no agent involved).
+    """
+    ledger = _apm_read(os.path.join(fdir, "ledger.edn"), tail=200000)
+    if not ledger:
+        return None
+    # (:from :x, :to :y) paired with the :event/at that precedes it
+    events = []
+    for m in re.finditer(r':event/at "([^"]+)".{0,400}?:from :([a-z0-9-]+), :to :([a-z0-9-]+)',
+                         ledger, re.S):
+        at, frm, to = m.group(1), m.group(2), m.group(3)
+        if not events or events[-1][1:] != (frm, to):
+            events.append((at, frm, to))
+    if not events:
+        return None
+    jobs = _apm_running_jobs()
+    now = time.time()
+    phases = []
+    for i, (at, frm, to) in enumerate(events):
+        start = _apm_epoch(at)
+        end = _apm_epoch(events[i + 1][0]) if i + 1 < len(events) else None
+        phases.append({"phase": frm if i == 0 else None})
+        phases[-1] = {"phase": to,
+                      "started_at": at,
+                      "duration_s": int((end or now) - start) if start else None,
+                      "current": end is None}
+    # Link the live phase to an agent turn for THIS frame, if one is running.
+    cur = phases[-1] if phases else None
+    if cur:
+        role = None
+        for j in jobs:
+            a = str(j.get("agent") or "")
+            if a.startswith(frame + "-"):
+                role = {"agent": a, "for_s": j.get("for_s")}
+                break
+        cur["agent"] = role
+        # No agent turn means the loop itself is working -- name it, so a quiet
+        # stretch reads as in-process work rather than as nothing happening.
+        cur["actor"] = "agent" if role else "in-process"
+    return phases[-8:]
+
+
 def _apm_phase_detail(fdir, phase):
     """What the CURRENT phase is doing, from its own live/<phase>.edn.
 
@@ -1904,6 +1957,7 @@ def apm_status():
             "watchdog": wd_status, "valid_wait": wd_valid_wait,
             "jvm": _jvm_health(),
             "phase_detail": _apm_phase_detail(fdir, phase),
+            "timeline": _apm_frame_timeline(fdir, campaign, "f%d" % num),
             "substrate": _substrate_permits(),
             "cascade": cascade, "recent": recent,
             "banked": ["f%d" % n for n in banked[-3:]],

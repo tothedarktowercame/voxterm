@@ -728,6 +728,12 @@ function renderApm() {
     // "progress Nm ago" alone reads as a stall during a phase that is working
     // hard and simply not moving anything a ledger notices. Lead with what the
     // phase is actually doing when it says so.
+    const cur = (d.timeline || []).filter(p => p.current)[0];
+    if (cur) {
+      bits.push(cur.actor === 'agent' && cur.agent
+        ? '<span class="n">' + esc(cur.agent.agent) + '</span> ' + apmAge(cur.agent.for_s)
+        : '<span class="warn">in-process</span> ' + apmAge(cur.duration_s));
+    }
     const pd = d.phase_detail;
     if (pd && pd.stage) {
       const retrying = pd.retry_attempt != null && pd.retry_max != null;
@@ -748,6 +754,19 @@ function renderApm() {
     rows.push('watchdog: ' + esc(d.watchdog || 'no file')
               + (d.valid_wait ? ' (valid external wait)' : '')
               + ' · last write ' + apmAge(d.last_write_s) + ' ago');
+    // Frame timeline: how the frame got here, how long each phase took, and
+    // WHO is doing the current one -- an agent turn, or the loop itself.
+    if (d.timeline && d.timeline.length) {
+      const tl = d.timeline.map(p => {
+        const dur = apmAge(p.duration_s);
+        if (!p.current) return esc(p.phase) + ' ' + dur;
+        const who = p.actor === 'agent' && p.agent
+          ? '<span class="n">' + esc(p.agent.agent) + '</span> ' + apmAge(p.agent.for_s)
+          : '<span class="warn">in-process</span>';
+        return '<span class="ok">' + esc(p.phase) + ' ' + dur + '</span> · ' + who;
+      });
+      rows.push('frame: ' + tl.join(' → '));
+    }
     if (d.phase_detail && (d.phase_detail.error_code || d.phase_detail.error_message)) {
       const pd = d.phase_detail;
       rows.push('phase: <span class="bad">' + esc(pd.error_code || '?') + '</span>'
