@@ -1251,8 +1251,32 @@ def agency_procs():
                 path = os.readlink("/proc/%d/cwd" % child).lower()
             except OSError:
                 path = ""
+            # A cwd says where work happens, not who is doing it, and the
+            # two come apart the moment a job borrows another frame's
+            # directory. On 2026-09-07 f188-student ran
+            #   cd /tmp/f188-lean && sed -i ... Main.lean
+            #   cd ~/code/apm-frames/f167-m99J04-student && lake env lean ...
+            # -- using a frame CLOSED hours earlier as a Lean project root,
+            # writing nothing into it -- and this path read the borrowed path
+            # as ownership. The panel showed a live "f167-student" tree for a
+            # dead frame, on a problem nobody had scheduled (Joe: "that should
+            # never happen").
+            #
+            # So require the candidate to be doing something. role_agents is
+            # the population this heuristic was written for (role-runner jobs,
+            # spawned by the JVM one short bash per command); an invoking agent
+            # covers a role job that has aged out of the rolling 20-job window.
+            # A dormant agent -- f167-student has been :restored since the
+            # 14:40 sweep, with no job and no invoke -- cannot own a running
+            # process, whatever directory that process is sitting in. Keeping
+            # the token match over this smaller set preserves the reason the
+            # path exists: telling two CONCURRENT role runners apart, which
+            # sole-role-job below cannot do.
+            live_cands = set(role_agents) | {
+                name for name, st in info.items()
+                if (st[0] if isinstance(st, tuple) else st) == "invoking"}
             cands = []
-            for cand in info:
+            for cand in live_cands:
                 toks = [t for t in cand.lower().split("-") if len(t) >= 3]
                 if toks and all(t in path for t in toks):
                     cands.append((len(cand), cand))
