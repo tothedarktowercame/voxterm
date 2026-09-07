@@ -716,6 +716,18 @@ function renderApm() {
   const red = d.state === 'stopped' || d.state === 'stalled' || d.state === 'degraded';
   const bits = ['APM ' + esc(camp) + ' <span class="n">' + esc(d.frame || '—')
                 + '/' + esc(d.problem || '?') + '</span>'];
+  // Parked decisions ride ALONGSIDE the state, not inside it. A park does not
+  // stop the campaign -- the queue advances to the next problem -- so state
+  // stays 'ok' and every branch below would have stayed silent. Two were
+  // sitting unseen on 2026-09-07, one of them a refuted statement that had
+  // already cost f190 29 solver rounds (Joe: "why is it that we are finding
+  // errors, parking them, and then not fixing the actual underlying errors").
+  const parked = d.parked_decisions || [];
+  if (parked.length) {
+    bits.push('<span class="warn">' + parked.length + ' parked: '
+              + esc(parked.map(p => p.problem || p.frame || '?').join(', '))
+              + '</span>');
+  }
   if (red) {
     bits.push('<span class="bad">' + esc(d.alert || d.state) + '</span>');
     if (d.state === 'degraded') bits.push(esc(d.phase || '?'));

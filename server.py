@@ -1869,6 +1869,43 @@ def _substrate_permits():
         return None
 
 
+def _apm_parked_decisions(cdir):
+    """Frames parked awaiting a decision, from the queue's own state.
+
+    A park sets :decision/status :awaiting-decision, :decision/owner
+    :claude-supervisor and :decision/bell-required true -- but nothing rings
+    anything. Searching the source on 2026-09-07 found :decision/bell-required
+    read in exactly one place, as a validation invariant asserting the flag is
+    true while awaiting and false once decided. No sender exists.
+
+    So a frame could stop dead with a real, actionable finding and no surface
+    showed it. Three were sitting unseen when this was written, including a
+    refuted statement (b98J04) that had already cost f190 29 solver rounds.
+    A park nobody sees is only half a stop.
+    """
+    out = []
+    try:
+        text = _apm_read(os.path.join(cdir, "queue-state.edn"), tail=400000)
+    except Exception:
+        return out
+    for m in re.finditer(r":decision/status :awaiting-decision", text):
+        seg = text[max(0, m.start() - 3000):m.start() + 1500]
+        frame = re.findall(r':frame/id "([^"]+)"', seg)
+        prob = re.findall(r':problem/id "([^"]+)"', seg)
+        code = re.findall(r":error/code :([a-z0-9-]+)", seg)
+        out.append({"frame": frame[-1] if frame else None,
+                    "problem": prob[-1] if prob else None,
+                    "code": code[-1] if code else None})
+    # One park can carry several matching keys; collapse identical rows.
+    seen, uniq = set(), []
+    for row in out:
+        key = (row["frame"], row["problem"], row["code"])
+        if key not in seen:
+            seen.add(key)
+            uniq.append(row)
+    return uniq
+
+
 def apm_status():
     now = time.time()
     campaign = _apm_active_campaign()
@@ -1974,6 +2011,16 @@ def apm_status():
 
     recent = [_apm_frame_brief(n, d) for n, d in frames[-6:-1]][::-1]
     banked = [n for n, d in frames if _apm_banked(d)]
+    # A parked frame does not stop the campaign -- the queue advances to the
+    # next problem -- so `state` stays "ok" and the strip stayed silent while
+    # decisions piled up. Surface them without pretending the campaign is down.
+    parked = _apm_parked_decisions(cdir)
+    if parked and not alert:
+        alert = "%d parked, awaiting decision: %s" % (
+            len(parked),
+            ", ".join(filter(None, (p.get("problem") or p.get("frame")
+                                    for p in parked[:3]))))
+
     return {"ok": True, "campaign": campaign, "frame": "f%d" % num,
             "problem": problem, "phase": phase, "state": state, "alert": alert,
             "last_progress_s": int(progress_s) if progress_s is not None else None,
@@ -1986,6 +2033,7 @@ def apm_status():
             "cascade": cascade, "recent": recent,
             "banked": ["f%d" % n for n in banked[-3:]],
             "banked_count": len(banked),
+            "parked_decisions": parked,
             "jobs": _apm_running_jobs()}
 
 
