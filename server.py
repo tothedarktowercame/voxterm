@@ -1107,26 +1107,41 @@ def agency_procs():
     # because `invoke-started-at` is rewritten every TURN while the process is
     # per SEAT (claude-1: process 17:20:41, invoke-started-at 17:25:58 on
     # 2026-09-01) -- which is what produced the "?" rows Joe asked about.
-    by_session, starts, info = {}, [], {}
+    by_session, starts, info, act_at, turn_start = {}, [], {}, {}, {}
     with urlopen("http://127.0.0.1:7070/api/alpha/agents", timeout=2.5) as r:
         for agent in (json.load(r).get("agents") or {}).values():
             ident = (agent.get("id") or {}).get("id/value")
             if not ident:
                 continue
             info[ident] = (agent.get("status"), agent.get("invoke-activity"))
+            act_at[ident] = epoch(agent.get("invoke-activity-at"))
+            # Rewritten every TURN (not per seat), so for an agent that is
+            # actually in a turn this is that turn's start -- the line between
+            # work this turn spawned and work carried over from an earlier one.
+            turn_start[ident] = epoch(agent.get("invoke-started-at"))
             if agent.get("session-id"):
                 by_session[agent["session-id"]] = ident
             t = epoch(agent.get("invoke-started-at"))
             if t:
                 starts.append((t, ident))
+    # Agents with a live job. Necessary but NOT sufficient on its own: a seat
+    # driven straight from the operator's REPL runs a turn without ever minting
+    # an invoke job, so claude-4 mid-turn shows no job at all. Pair it with
+    # recent reported activity, on the same 120s bound the chips use.
+    # The roster `status` on these rows is intent, not liveness (2026-09-04),
+    # so it cannot answer this: an idle-flagged seat may still be mid-turn, and
+    # an invoking-flagged one may have finished.
+    turn_agents = set()
     try:
         with urlopen("http://127.0.0.1:7070/api/alpha/invoke/jobs",
                      timeout=2.5) as r:
             for job in (json.load(r).get("jobs") or []):
                 if job.get("state") in ("running", "queued"):
                     t = epoch(job.get("started-at") or job.get("created-at"))
-                    if t and job.get("agent-id"):
-                        starts.append((t, job["agent-id"]))
+                    if job.get("agent-id"):
+                        turn_agents.add(job["agent-id"])
+                        if t:
+                            starts.append((t, job["agent-id"]))
     except Exception:
         pass
 
@@ -1146,6 +1161,45 @@ def agency_procs():
     except Exception:
         pass
     sole_role = next(iter(role_agents)) if len(role_agents) == 1 else None
+
+    def in_turn(ident):
+        """Is this agent running a turn right now?
+
+        The roster `status` cannot answer it -- that flag is intent, not
+        liveness (2026-09-04). Two signals that are: a live invoke job, or
+        activity reported within the chips' 120s window. An operator-driven
+        seat has the second without the first; a bell-driven one usually has
+        both.
+        """
+        if ident in turn_agents:
+            return True
+        t = act_at.get(ident)
+        return bool(t and (time.time() - t) <= 120)
+
+    def mark_carried(root, cutoff):
+        """Flag descendants that predate CUTOFF; return whether any did.
+
+        The root is the seat process itself, which predates every turn by
+        construction, so it is never flagged -- only what runs beneath it. A
+        two-second slack absorbs the skew between the roster's timestamp and
+        `ps` elapsed seconds.
+        """
+        now = time.time()
+        found = [False]
+
+        def walk(node, inherited):
+            for kid in node.get("children") or []:
+                started = now - (kid.get("elapsed") or 0)
+                # Inherit: a `sleep 10` freshly spawned INSIDE a carried-over
+                # watch loop is part of that background job, not new turn work,
+                # and labelling it otherwise splits one job across two readings.
+                bg = inherited or cutoff is None or started < cutoff - 2
+                if bg:
+                    kid["background"] = True
+                    found[0] = True
+                walk(kid, bg)
+        walk(root, False)
+        return found[0]
 
     # Attribution for unmatched JVM children. A seat process persists long
     # after its job finished, so job created-at correlation decays as soon as
@@ -1355,8 +1409,26 @@ def agency_procs():
             # seat; whether anything is RUNNING is what its child processes
             # say (the tree), and any activity shown is the seat's last
             # reported one, not proof of a running turn.
+            # Children running while the agent has NO live job are work that
+            # outlives the turn that started it: a detached script left behind
+            # deliberately. Joe, 2026-09-07, on claude-1's f10-unblock-watch:
+            # "I don't think there's any real concern. It's just not obvious
+            # that this job is set up for a background run that takes place
+            # between claude-1 turns." The tree showed the processes; nothing
+            # said they were deferred rather than live, so a normal deferred
+            # job read as an agent doing something unaccountable.
+            # Mark work CARRIED OVER from an earlier turn, per process rather
+            # than per agent. Keying it on the agent alone hid the very thing
+            # Joe asked to see: claude-1's f10-unblock-watch is deferred work
+            # whether or not claude-1 happens to be mid-turn right now, and the
+            # moment it woke for an unrelated turn the label vanished. A
+            # descendant that predates this turn's start was left behind by an
+            # earlier one; if no turn is in flight, everything still running was.
+            cutoff = turn_start.get(ident) if in_turn(ident) else None
+            carried = mark_carried(tree, cutoff)
             rows.append({"id": ident, "status": "seat", "activity": act,
                          "matched-by": how, "pid": child,
+                         "background": carried,
                          "elapsed": c["elapsed"], "tree": tree})
         else:
             tree["session"] = sid

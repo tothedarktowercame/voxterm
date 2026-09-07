@@ -634,7 +634,11 @@ function renderTree(node, depth, out) {
              + '<span class="' + hot.trim() + '">' + esc(node.cmd) + '</span>'
              + (node.cwd ? ' \u00b7 ' + esc(node.cwd) : '')
              + ' \u00b7 ' + fmtElapsed(node.elapsed)
-             + (node.cpu >= 5 ? ' \u00b7 ' + Math.round(node.cpu) + '%' : ''));
+             + (node.cpu >= 5 ? ' \u00b7 ' + Math.round(node.cpu) + '%' : '')
+             // Work carried over from an earlier turn, marked per process so a
+             // seat that is mid-turn shows its live work and its deferred work
+             // as the different things they are.
+             + (node.background ? ' \u00b7 <span class="idle">bg</span>' : ''));
   }
   for (const child of (node.children || [])) renderTree(child, depth + 1, out);
 }
@@ -660,8 +664,17 @@ function renderProcs(data) {
   for (const row of rows) {
     if (busy(row)) {
       const act = row.activity ? ' \u2014 ' + esc(row.activity) : '';
+      // Children still running while the agent has NO turn in flight are work
+      // it deliberately left behind -- a detached script that wakes on some
+      // later condition. The tree showed the processes but never said they
+      // were deferred, so a perfectly normal background job read as an agent
+      // doing something unaccountable (Joe, 2026-09-07, on claude-1's
+      // f10-unblock-watch: "it's just not obvious that this job is set up for
+      // a background run that takes place between claude-1 turns").
+      const bg = row.background
+        ? ' \u00b7 <span class="hot">has background work</span> (runs between turns)' : '';
       out.push('<span class="who">' + esc(row.id) + '</span> \u00b7 ' + esc(row.tree.cmd)
-               + ' \u00b7 seat up ' + fmtElapsed(row.elapsed) + act);
+               + ' \u00b7 seat up ' + fmtElapsed(row.elapsed) + bg + act);
       renderTree(row.tree, 0, out);
     }
     // Idle seats are not listed: a seat's uptime is not work, and a line for it
