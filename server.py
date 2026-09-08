@@ -1924,31 +1924,67 @@ def _apm_phase_detail(fdir, phase):
     phase files carry the live detail -- stage, retry budget, and the finding
     that caused the last failure -- so read that instead of inferring from
     silence.
+
+    Read the LAST error and pair its message by proximity, never the first
+    match of each field independently. A phase file is an append-only history,
+    so a plain re.search returns the OLDEST error in it and keeps returning it
+    forever. On 2026-09-08 f193 rendered :error/code from byte 3529 beside
+    :error/message from byte 31648 -- 28KB and many events apart -- producing
+    "report-edn-lint-failed / Atomic memory assertion transport failed", a pair
+    that never occurred. Joe read that chimera as a recurring error class over
+    several hours and was chasing a rendering artifact. The real terminal error
+    sat at byte 31191, :live-job-transport-retry-exhausted, and was never shown.
+
+    Also carry the file's age. This detail described a frame that had been dead
+    for an hour while the strip reported state ok, so a stale detail must say
+    so rather than present as current.
     """
     if not phase:
         return None
-    raw = _apm_read(os.path.join(fdir, "live", phase + ".edn"), tail=20000)
+    path = os.path.join(fdir, "live", phase + ".edn")
+    raw = _apm_read(path, tail=20000)
     if not raw:
         return None
+    try:
+        age_s = int(time.time() - os.path.getmtime(path))
+    except OSError:
+        age_s = None
+
+    def last(pat):
+        ms = list(re.finditer(pat, raw))
+        return ms[-1] if ms else None
+
     def field(k, quoted=False):
-        m = re.search(r':%s\s+"([^"]*)"' % k if quoted else r':%s\s+([^\s,}\]]+)' % k, raw)
+        m = last(r':%s\s+"([^"]*)"' % k if quoted else r':%s\s+([^\s,}\]]+)' % k)
         return m.group(1) if m else None
+
     stage = field("stage")
-    err = field(r"error/code")
     att = field(r"transport-retry/attempt")
     mx = field(r"transport-retry/max-attempts")
     nb = field(r"transport-retry/not-before-ms")
     rk = field(r"repair/kind")
     ra = field(r"repair/attempts")
     rm = field(r"repair/max-attempts")
+
+    # Anchor on the last error, then take the message nearest it. Unpaired is
+    # reported as None: a message from an unrelated event is worse than none.
+    err = None
     msg = None
-    m = re.search(r':error/message "([^"]{0,120})"', raw)
-    if m:
-        msg = m.group(1)
+    em = last(r':error/code\s+([^\s,}\]]+)')
+    if em:
+        err = em.group(1)
+        best = None
+        for mm in re.finditer(r':error/message\s+"([^"]{0,160})"', raw):
+            d = abs(mm.start() - em.start())
+            if d <= 2000 and (best is None or d < best[0]):
+                best = (d, mm.group(1))
+        msg = best[1] if best else None
+
     retry_in = None
     if nb and nb.isdigit():
         retry_in = int((int(nb) - time.time() * 1000) / 1000)
     return {"stage": stage, "error_code": err, "error_message": msg,
+            "detail_age_s": age_s,
             "retry_attempt": att, "retry_max": mx, "retry_in_s": retry_in,
             "repair_kind": rk, "repair_attempts": ra, "repair_max": rm}
 
