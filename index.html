@@ -744,8 +744,18 @@ function renderApm() {
   if (rearms.length && d.state !== 'stalled') {
     const last = rearms[rearms.length - 1];
     const when = new Date(last.at_ms).toISOString().slice(11, 16);
-    bits.push('<span class="warn">coordinator halted ' + esc(when)
-              + 'Z, rearmed</span>' + (rearms.length > 1
+    // Say HOW OLD, and stop shouting once it is history. The payload keeps six
+    // hours of rearms so a self-healing halt stays legible, but rendering a
+    // bare HH:MM in warn colour made an hour-old rearm read as a live fault:
+    // Joe kept seeing "coordinator halted, rearmed" at 00:20 for a rearm at
+    // 23:12 that was his own operator resume (2026-09-08).
+    const age = last.age_s || 0;
+    const ago = age < 90 ? 'just now'
+              : age < 5400 ? Math.round(age / 60) + 'm ago'
+              : Math.round(age / 3600) + 'h ago';
+    const cls = age > 900 ? 'n' : 'warn';
+    bits.push('<span class="' + cls + '">coordinator halted ' + esc(when)
+              + 'Z (' + esc(ago) + '), rearmed</span>' + (rearms.length > 1
                 ? ' \u00d7' + rearms.length : ''));
   }
   const parked = d.parked_decisions || [];
