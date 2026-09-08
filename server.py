@@ -2157,16 +2157,32 @@ def apm_status():
     # Cascade expansion runs inside a tick with no job to watch; its own
     # record says whether the quiet minutes are it.
     cascade = None
+    cascade_seeds = None
     cop = _apm_read(os.path.join(fdir, "live", "memory-cascade-operation.edn"))
     if cop:
         cst = re.search(r":status :([a-z-]+)", cop)
         cascade = cst.group(1) if cst else None
-    # A dead cascade doesn't stall the frame, but the student then runs with
-    # no served memory: the frame measures a dead transport, not a memory
-    # effect (f187, 2026-09-07). That's an alarm even while phases advance.
+        csd = re.search(r":seed-count (\d+)", cop)
+        if csd:
+            cascade_seeds = int(csd.group(1))
+    # A dead cascade doesn't stall the frame, but it changes what the frame is
+    # measuring, so it stays an alarm even while phases advance (f187).
+    #
+    # Two different faults were reported with one sentence. The shelf can be
+    # empty -- f51/A10, the frame measures a dead transport and the datum is
+    # void -- or seeds can be served and only the expansion over them fail.
+    # f193 was the second: 313 ids served, 313 seeds recorded, expansion
+    # dead. This line said "running WITHOUT served memory" for both, which
+    # was simply false on f193 and sent the diagnosis to the wrong layer.
     if cascade == "failed" and state == "ok":
         state = "degraded"
-        alert = "cascade failed: frame is running WITHOUT served memory"
+        if cascade_seeds:
+            alert = ("cascade expansion failed: %d seeds served, not expanded"
+                     % cascade_seeds)
+        elif cascade_seeds == 0:
+            alert = "cascade failed: frame is running WITHOUT served memory"
+        else:
+            alert = "cascade failed: served memory unknown (no seed count)"
 
     recent = [_apm_frame_brief(n, d) for n, d in frames[-6:-1]][::-1]
     banked = [n for n, d in frames if _apm_banked(d)]
