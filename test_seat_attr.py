@@ -1,4 +1,4 @@
-"""Regression test: a seat carrying --resume <sid> is never 'unattributed'."""
+"""Regression test: resume seats use known owners, never departed cached names."""
 import io,json,os,sys,types
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import server
@@ -58,7 +58,14 @@ ids=sorted(x["id"] for x in r["agents"]); um=r["unmatched"]
 check("both seats attributed to claude-1", ids==["claude-1","claude-1"], str(ids))
 check("nothing unmatched", um==[], json.dumps(um)[:200])
 
-print("scenario B: registry blink drops claude-1 from one poll")
+# Reverses the earlier "retain attribution through a registry blink" expectation.
+# On 2026-09-07, claude-10 was displayed for /tmp/f10-unblock-watch.sh even
+# though it had left the roster; its b2de8138 session (S1 here) had been taken
+# over by claude-1. The known_agent docstring inside server.agency_procs explains
+# the ruling: naming a departed agent is worse than leaving a visible gap.
+# A single poll cannot distinguish a blink from retirement, so cache alone
+# must not preserve the missing name.
+print("scenario B: departed roster owner is not resurrected from the session memo")
 server._SESSION_OWNERS.clear()
 install(ps_for([(JVM,1,9999,"java","java -jar agency.jar"),
                 (100,JVM,1735,"claude",SEAT%S1)]), make_agents())
@@ -68,9 +75,11 @@ install(ps_for([(JVM,1,9999,"java","java -jar agency.jar"),
 r=server.agency_procs()
 named=[x["id"] for x in r["agents"]]
 likely=[t.get("likely-agent") for t in r["unmatched"]]
-check("seat still named claude-1 through the blink",
-      named==["claude-1"] or likely==["claude-1"], "agents=%s unmatched-likely=%s"%(named,likely))
-check("no seat left unattributed", all(l is not None for l in likely), str(likely))
+check("departed owner is not named from the session memo",
+      named==[], "agents=%s"%named)
+check("departed owner's seat remains unmatched without a guessed owner",
+      len(r["unmatched"])==1 and likely==[None],
+      "unmatched=%s"%json.dumps(r["unmatched"])[:200])
 
 print("scenario C: genuinely unknown session (agent not in registry, cold memo)")
 server._SESSION_OWNERS.clear()
