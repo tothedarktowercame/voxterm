@@ -2019,41 +2019,38 @@ def _substrate_permits():
         return None
 
 
+_APM_PARK_CACHE = {}
+_APM_PARK_LOCK = threading.Lock()
+
+
 def _apm_parked_decisions(cdir):
-    """Frames parked awaiting a decision, from the queue's own state.
+    """Project top-level park records with an EDN reader, never text proximity.
 
-    A park sets :decision/status :awaiting-decision, :decision/owner
-    :claude-supervisor and :decision/bell-required true -- but nothing rings
-    anything. Searching the source on 2026-09-07 found :decision/bell-required
-    read in exactly one place, as a validation invariant asserting the flag is
-    true while awaiting and false once decided. No sender exists.
-
-    So a frame could stop dead with a real, actionable finding and no surface
-    showed it. Three were sitting unseen when this was written, including a
-    refuted statement (b98J04) that had already cost f190 29 solver rounds.
-    A park nobody sees is only half a stop.
+    The queue contains nested historical reports with the same field names.
+    Cache by file identity/mtime/size to avoid a Babashka process each UI poll.
+    Reader failures remain visible instead of looking like an empty queue.
     """
-    out = []
+    path = os.path.join(cdir, "queue-state.edn")
     try:
-        text = _apm_read(os.path.join(cdir, "queue-state.edn"), tail=400000)
-    except Exception:
-        return out
-    for m in re.finditer(r":decision/status :awaiting-decision", text):
-        seg = text[max(0, m.start() - 3000):m.start() + 1500]
-        frame = re.findall(r':frame/id "([^"]+)"', seg)
-        prob = re.findall(r':problem/id "([^"]+)"', seg)
-        code = re.findall(r":error/code :([a-z0-9-]+)", seg)
-        out.append({"frame": frame[-1] if frame else None,
-                    "problem": prob[-1] if prob else None,
-                    "code": code[-1] if code else None})
-    # One park can carry several matching keys; collapse identical rows.
-    seen, uniq = set(), []
-    for row in out:
-        key = (row["frame"], row["problem"], row["code"])
-        if key not in seen:
-            seen.add(key)
-            uniq.append(row)
-    return uniq
+        with _APM_PARK_LOCK:
+            stat = os.stat(path)
+            stamp = (stat.st_ino, stat.st_mtime_ns, stat.st_size)
+            cached = _APM_PARK_CACHE.get(path)
+            if cached and cached[0] == stamp:
+                return cached[1]
+            result = subprocess.run(
+                ["bb", os.path.join(HERE, "apm_parked_projection.clj"), path],
+                capture_output=True, text=True, timeout=5, check=True)
+            projection = {"rows": json.loads(result.stdout), "error": None}
+            _APM_PARK_CACHE[path] = (stamp, projection)
+            return projection
+    except FileNotFoundError as exc:
+        # A campaign may legitimately have no queue yet; a missing bb is an error.
+        if not os.path.exists(path):
+            return {"rows": [], "error": None}
+        return {"rows": [], "error": "parked queue unreadable: " + str(exc)}
+    except (OSError, subprocess.SubprocessError, ValueError) as exc:
+        return {"rows": [], "error": "parked queue unreadable: " + str(exc)}
 
 
 def apm_status():
@@ -2200,7 +2197,8 @@ def apm_status():
     # A parked frame does not stop the campaign -- the queue advances to the
     # next problem -- so `state` stays "ok" and the strip stayed silent while
     # decisions piled up. Surface them without pretending the campaign is down.
-    parked = _apm_parked_decisions(cdir)
+    park_projection = _apm_parked_decisions(cdir)
+    parked = park_projection["rows"]
     if parked and not alert:
         alert = "%d parked, awaiting decision: %s" % (
             len(parked),
@@ -2220,6 +2218,7 @@ def apm_status():
             "banked": ["f%d" % n for n in banked[-3:]],
             "banked_count": len(banked),
             "parked_decisions": parked,
+            "parked_decisions_error": park_projection["error"],
             "coordinator_rearms": rearms,
             "jobs": _apm_running_jobs()}
 

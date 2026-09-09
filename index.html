@@ -758,6 +758,9 @@ function renderApm() {
               + 'Z (' + esc(ago) + '), rearmed</span>' + (rearms.length > 1
                 ? ' \u00d7' + rearms.length : ''));
   }
+  if (d.parked_decisions_error) {
+    bits.push('<span class="bad">' + esc(d.parked_decisions_error) + '</span>');
+  }
   const parked = d.parked_decisions || [];
   if (parked.length) {
     bits.push('<span class="warn">' + parked.length + ' parked: '
