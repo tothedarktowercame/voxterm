@@ -6,42 +6,45 @@ degraded success rendered as a total absence, which sent the diagnosis to
 the wrong layer. The empty shelf is a different fault (f51/A10) and must
 stay loud, so this checks both directions plus the two cases in between.
 
-Drives the real apm_status() over a temp copy of f193's own files rather
+Drives the real apm_status() over a frozen excerpt of f193's own files rather
 than re-implementing the branch: a test that reads a copy of the logic is
 the same mistake the strip made.
 
 Run: python3 test_apm_cascade_strip.py
 """
 import os, re, shutil, sys, tempfile
+from pathlib import Path
+from unittest.mock import patch
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import server
 
-SRC_C = ("/home/joe/code/futon3c/data/apm-campaigns/jit-all-open-v3")
+# Captured 2026-09-09 from f193; exact paths/hashes in the fixture README.
+FIXTURE = Path(__file__).parent / "fixtures" / "apm-cascade-strip"
 CAMP = "jit-all-open-v3"
-SRC_F = os.path.join(SRC_C, CAMP + "-f193")
-
 root = tempfile.mkdtemp(prefix="s3-strip-")
 cdir = os.path.join(root, CAMP)
 fdir = os.path.join(cdir, CAMP + "-f193")
 os.makedirs(os.path.join(fdir, "live"))
-for f in os.listdir(SRC_C):
-    p = os.path.join(SRC_C, f)
-    if os.path.isfile(p):
-        shutil.copy2(p, cdir)
-for f in os.listdir(SRC_F):
-    p = os.path.join(SRC_F, f)
-    if os.path.isfile(p):
-        shutil.copy2(p, fdir)
+shutil.copy2(FIXTURE / "coordinator.edn", cdir)
+shutil.copy2(FIXTURE / "ledger.edn", fdir)
 COP = os.path.join(fdir, "live", "memory-cascade-operation.edn")
-shutil.copy2(os.path.join(SRC_F, "live", "memory-cascade-operation.edn"), COP)
-server.APM_ROOT = root
+real = (FIXTURE / "memory-cascade-operation.edn").read_text()
+NOW = int(re.search(r":finished-at-ms (\d+)", real).group(1)) / 1000 + 1
 
-real = open(COP).read()
 fails = []
 
 def run(label, text, want_in=None, want_not_in=(), want_state=None):
     open(COP, "w").write(text)
-    d = server.apm_status()
+    os.utime(COP, (NOW, NOW))
+    # Only unrelated external I/O is stubbed; cascade interpretation and
+    # campaign/frame/ledger parsing still run through the real apm_status.
+    with patch.object(server, "APM_ROOT", root), \
+         patch.object(server.time, "time", return_value=NOW), \
+         patch.object(server, "_jvm_health", return_value=None), \
+         patch.object(server, "_substrate_permits", return_value=None), \
+         patch.object(server, "_apm_running_jobs", return_value=[]), \
+         patch.object(server, "urlopen", side_effect=AssertionError("network forbidden")):
+        d = server.apm_status()
     st, al = d.get("state"), d.get("alert") or ""
     print("%-18s %-9s | %s" % (label, st, al))
     if want_in and want_in not in al:
