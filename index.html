@@ -880,17 +880,19 @@ refreshApm();
 // means the supervisor itself has gone.
 const topoEl = $('#topo');
 let topoData = null, topoExpanded = false;
-function renderTopo() {
-  const d = topoData;
-  if (!d) { topoEl.innerHTML = ''; return; }
+// One line per campaign. The lab runs two build loops now -- Sard on track 1,
+// oriented-manifold fundamental classes on track 2 -- and a strip that showed
+// only the first would leave the second invisible, which is the whole reason
+// the first one got a strip.
+function renderTopoTrack(d, label, out) {
   if (d.ok === false) {
-    topoEl.innerHTML = '<div class="strip alarm">' + (topoExpanded ? '▾' : '▸')
-      + ' TOPO: <span class="bad">status unreadable — ' + esc(d.error || '?')
-      + '</span></div>';
+    out.push('<div class="strip alarm">' + (topoExpanded ? '▾' : '▸')
+      + ' ' + label + ': <span class="bad">status unreadable — '
+      + esc(d.error || '?') + '</span></div>');
     return;
   }
   const red = d.state === 'stopped' || d.state === 'stalled';
-  const bits = ['TOPO <span class="n">' + esc(d.row || '—') + '</span>'];
+  const bits = [label + ' <span class="n">' + esc(d.row || '—') + '</span>'];
   if (red) {
     bits.push('<span class="bad">' + esc(d.alert || d.state) + '</span>');
   } else if (d.state === 'idle') {
@@ -902,8 +904,8 @@ function renderTopo() {
     bits.push('<span class="ok">beat ' + apmAge(d.heartbeat_s) + '</span>');
   }
   if (d.rows_total) bits.push(d.done + '/' + d.rows_total + ' done');
-  const out = ['<div class="strip' + (red ? ' alarm' : '') + '">'
-               + (topoExpanded ? '▾' : '▸') + ' ' + bits.join(' · ') + '</div>'];
+  out.push('<div class="strip' + (red ? ' alarm' : '') + '">'
+           + (topoExpanded ? '▾' : '▸') + ' ' + bits.join(' · ') + '</div>');
   if (topoExpanded) {
     const st = Object.keys(d.states || {})
       .map(k => k + ' ' + d.states[k]).join(' · ');
@@ -916,6 +918,15 @@ function renderTopo() {
                + '</div>');
     });
   }
+}
+function renderTopo() {
+  const data = topoData;
+  if (!data) { topoEl.innerHTML = ''; return; }
+  // Older servers answer with a single flat track and no .tracks array.
+  const tracks = (data.tracks && data.tracks.length) ? data.tracks : [data];
+  const out = [];
+  tracks.forEach(d => renderTopoTrack(
+    d, tracks.length > 1 ? 'TOPO' + (d.track || '?') : 'TOPO', out));
   topoEl.innerHTML = out.join('\n');
 }
 topoEl.addEventListener('click', () => { topoExpanded = !topoExpanded; renderTopo(); });

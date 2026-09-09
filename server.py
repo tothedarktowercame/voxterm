@@ -1765,16 +1765,23 @@ def _topo_edn_field(text, key, quoted=True):
     return m.group(1) if m else None
 
 
-def topology_status():
+def _topology_track(track, runs_name, worklist_name):
+    """One build loop, read from its own run directory.
+
+    Each campaign gets its own TOPOLOGY_RUNS and TOPOLOGY_LEDGER (apm-lean
+    45f338c3), so a second track is a second (runs2, worklist2.edn) pair in
+    the same lab rather than a second lab.
+    """
     now = time.time()
-    runs = os.path.join(TOPO_LAB, "runs")
+    runs = os.path.join(TOPO_LAB, runs_name)
     inflight = _apm_read(os.path.join(runs, "inflight.edn"))
     heartbeat = _apm_read(os.path.join(runs, "heartbeat.edn"))
     log = _apm_read(os.path.join(runs, "build-loop.log"), tail=20000)
-    worklist = _apm_read(os.path.join(TOPO_LAB, "worklist.edn"))
+    worklist = _apm_read(os.path.join(TOPO_LAB, worklist_name))
 
     if not os.path.isdir(runs):
-        return {"ok": False, "error": "no topology lab at " + TOPO_LAB}
+        return {"ok": False, "track": track,
+                "error": "no run directory at " + runs}
 
     row = _topo_edn_field(inflight, "row")
     seat = _topo_edn_field(inflight, "seat")
@@ -1847,12 +1854,44 @@ def topology_status():
     else:
         state, alert = "idle", "no row dispatched"
 
-    return {"ok": True, "lab": os.path.basename(TOPO_LAB),
+    return {"ok": True, "lab": os.path.basename(TOPO_LAB), "track": track,
             "row": row, "seat": seat, "phase": phase,
             "state": state, "alert": alert,
             "for_s": disp_age, "heartbeat_s": hb_age,
             "states": states, "rows_total": total,
             "done": states.get("done", 0), "recent": recent}
+
+
+def _topology_tracks():
+    """(track, runs, worklist) for every campaign in the lab.
+
+    Track 1 is the original pair. Any runs<N> with a matching worklist<N>.edn
+    joins automatically, so standing up a third campaign needs no change here.
+    """
+    found = [("1", "runs", "worklist.edn")]
+    try:
+        for name in sorted(os.listdir(TOPO_LAB)):
+            m = re.fullmatch(r"runs(\d+)", name)
+            if not m:
+                continue
+            wl = "worklist%s.edn" % m.group(1)
+            if os.path.isfile(os.path.join(TOPO_LAB, wl)):
+                found.append((m.group(1), name, wl))
+    except OSError:
+        pass
+    return found
+
+
+def topology_status():
+    """Every track, so a second campaign is watchable rather than invisible.
+
+    Track 1's fields stay at the top level: this endpoint had a flat shape
+    before there was more than one loop, and a client that has not been
+    updated should keep showing the first campaign rather than nothing.
+    """
+    tracks = [_topology_track(*t) for t in _topology_tracks()]
+    first = tracks[0] if tracks else {"ok": False, "error": "no topology lab"}
+    return dict(first, tracks=tracks)
 
 
 def _jvm_health():
