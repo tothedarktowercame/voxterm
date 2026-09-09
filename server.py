@@ -47,7 +47,7 @@ def env_list(name, default):
 CODEX_MODELS_CACHE = os.path.expanduser("~/.codex/models_cache.json")
 
 
-def codex_models(limit=4):
+def codex_models(limit=None):
     """Model slugs the installed Codex CLI is currently offering.
 
     Codex slugs turn over fast (gpt-5.6-sol arrived after gpt-5.5), and the CLI
@@ -134,6 +134,17 @@ AGENT_RUNTIMES = {
             "models": env_list("VOXTERM_ZAI_MODELS", "glm-5.2"),
             "attach": "zai-repl-attach-agent"},
 }
+
+def runtime_choices():
+    """Refresh CLI model discovery when the picker opens, including new models."""
+    choices = []
+    for runtime, spec in AGENT_RUNTIMES.items():
+        models = (env_list("VOXTERM_CODEX_MODELS", ",".join(codex_models()))
+                  if runtime == "codex" else spec["models"])
+        choices.append({"type": runtime, "label": spec["label"],
+                        "models": models, "model-prefix": spec["model-prefix"]})
+    return choices
+
 
 # Decoder bias. A bare word list does NOT work — "Claude" listed alongside
 # "Clojure" makes it worse (measured: "Tell Claude" -> "Tell Clojure"). Showing
@@ -2470,11 +2481,7 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(200, json.dumps({"ok": False, "error": str(e)}),
                            "application/json")
         elif path == "/agency/runtimes":
-            runtimes = []
-            for runtime, spec in AGENT_RUNTIMES.items():
-                runtimes.append({"type": runtime, "label": spec["label"],
-                                 "models": spec["models"],
-                                 "model-prefix": spec["model-prefix"]})
+            runtimes = runtime_choices()
             self._send(200, json.dumps({"ok": True, "runtimes": runtimes}),
                        "application/json")
         elif path == "/agency/active":

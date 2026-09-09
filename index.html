@@ -482,7 +482,7 @@ function showModelChoices(runtime) {
 
 async function openCreateChoices() {
   if (creatingAgent) return;
-  if (!runtimeChoices) {
+  {
     try {
       const response = await fetch('agency/runtimes', { cache: 'no-store' });
       const result = await response.json();
