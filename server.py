@@ -1913,7 +1913,7 @@ def _apm_frame_timeline(fdir, campaign, frame):
     cur = phases[-1] if phases else None
     if cur:
         role = None
-        for j in jobs:
+        for j in (jobs or []):
             a = str(j.get("agent") or "")
             if a.startswith(frame + "-"):
                 role = {"agent": a, "for_s": j.get("for_s")}
@@ -1921,7 +1921,19 @@ def _apm_frame_timeline(fdir, campaign, frame):
         cur["agent"] = role
         # No agent turn means the loop itself is working -- name it, so a quiet
         # stretch reads as in-process work rather than as nothing happening.
-        cur["actor"] = "agent" if role else "in-process"
+        #
+        # But a feed we could not READ is neither. _apm_running_jobs returns
+        # None on any Agency failure and iterating that raised "'NoneType'
+        # object is not iterable" out of apm_status, so one 2.5s timeout
+        # replaced the whole strip with a Python error (Joe saw it 2026-09-09,
+        # during the topology loop's repair burst). Its own comment says the
+        # feed is "decoration only, never the verdict"; it had become the
+        # verdict. Guarding it alone would trade the crash for a quieter lie --
+        # "in-process" asserts the loop is working, which an unread feed does
+        # not establish -- so an unavailable feed says so.
+        cur["actor"] = ("agent" if role
+                        else "in-process" if jobs is not None
+                        else "unknown")
     return phases[-8:]
 
 

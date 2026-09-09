@@ -783,6 +783,8 @@ function renderApm() {
     if (cur) {
       bits.push(cur.actor === 'agent' && cur.agent
         ? '<span class="n">' + esc(cur.agent.agent) + '</span> ' + apmAge(cur.agent.for_s)
+        : cur.actor === 'unknown'
+        ? '<span class="warn">agent feed unreadable</span> ' + apmAge(cur.duration_s)
         : '<span class="warn">in-process</span> ' + apmAge(cur.duration_s));
     }
     const pd = d.phase_detail;
@@ -813,6 +815,8 @@ function renderApm() {
         if (!p.current) return esc(p.phase) + ' ' + dur;
         const who = p.actor === 'agent' && p.agent
           ? '<span class="n">' + esc(p.agent.agent) + '</span> ' + apmAge(p.agent.for_s)
+          : p.actor === 'unknown'
+          ? '<span class="warn">agent feed unreadable</span>'
           : '<span class="warn">in-process</span>';
         return '<span class="ok">' + esc(p.phase) + ' ' + dur + '</span> · ' + who;
       });
