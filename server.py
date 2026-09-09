@@ -2104,6 +2104,21 @@ def _apm_parked_decisions(cdir):
         return {"rows": [], "error": "parked queue unreadable: " + str(exc)}
 
 
+def _apm_park_label(row):
+    """Name a park as problem@phase.
+
+    Without the phase a parked learning measurement is indistinguishable from
+    a parked problem. f206/m02A06 parked at student-attempt-2 while its proof
+    was already certified, verified and landed on apm-lean master, and the
+    strip said only "m02A06" -- which reads as an unsolved problem.
+    """
+    name = row.get("problem") or row.get("frame")
+    if not name:
+        return None
+    phase = row.get("phase")
+    return name + "@" + phase if phase else name
+
+
 def apm_status():
     now = time.time()
     campaign = _apm_active_campaign()
@@ -2252,9 +2267,8 @@ def apm_status():
     parked = park_projection["rows"]
     if parked and not alert:
         alert = "%d parked, awaiting decision: %s" % (
-            len(parked),
-            ", ".join(filter(None, (p.get("problem") or p.get("frame")
-                                    for p in parked[:3]))))
+            len(parked), ", ".join(filter(None, map(_apm_park_label,
+                                                    parked[:3]))))
 
     return {"ok": True, "campaign": campaign, "frame": "f%d" % num,
             "problem": problem, "phase": phase, "state": state, "alert": alert,

@@ -764,7 +764,8 @@ function renderApm() {
   const parked = d.parked_decisions || [];
   if (parked.length) {
     bits.push('<span class="warn">' + parked.length + ' parked: '
-              + esc(parked.map(p => p.problem || p.frame || '?').join(', '))
+              + esc(parked.map(p => (p.problem || p.frame || '?')
+                               + (p.phase ? '@' + p.phase : '')).join(', '))
               + '</span>');
   }
   if (red) {
