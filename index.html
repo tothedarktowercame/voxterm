@@ -896,8 +896,11 @@ function renderTopoTrack(d, label, out) {
   const bits = [label + ' <span class="n">' + esc(d.row || '—') + '</span>'];
   if (red) {
     bits.push('<span class="bad">' + esc(d.alert || d.state) + '</span>');
-  } else if (d.state === 'idle') {
-    bits.push('<span class="warn">' + esc(d.alert || 'idle') + '</span>');
+  } else if (d.state === 'idle' || d.state === 'finished') {
+    // A finished track is not broken, but "1 row awaiting an owner decision"
+    // is the only thing on the line worth acting on -- the else branch below
+    // drops d.alert entirely and shows a heartbeat that stopped on purpose.
+    bits.push('<span class="warn">' + esc(d.alert || d.state) + '</span>');
   } else {
     bits.push(esc(d.phase || '?') + (d.seat ? ' <span class="n">'
               + esc(d.seat) + '</span>' : ''));

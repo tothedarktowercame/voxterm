@@ -1765,6 +1765,43 @@ def _topo_edn_field(text, key, quoted=True):
     return m.group(1) if m else None
 
 
+def _topo_supervisor_state(runs):
+    """Is the supervisor wrapping this loop still up? Ask its own log.
+
+    The loop writes STOP: into build-loop.log through log(), but its two
+    CLEAN exits go out through notify() only -- which sends a notice and
+    writes nothing to that file:
+
+        notify "PAUSED: no runnable rows; owner decision or strategy rewrite required"
+        notify "DONE: no open or unreviewed rows"
+
+    So the PAUSED|DONE alternation in the build-loop.log scan below has never
+    matched anything, and a track that finished left no trace in the file this
+    strip was reading. Track 1 exited cleanly at 18:59:54 on 2026-09-09 with
+    one :needs-owner row and reported as "supervisor silent 936s" -- red,
+    wrong, and pointing at the apparatus instead of at the decision it was
+    waiting for.
+
+    topology-supervisor.sh logs every start and every exit, so it is the
+    record of whether the supervisor is running. Returns None while it is up,
+    including between a repairable loop failure and the restart that follows.
+    """
+    text = _apm_read(os.path.join(runs, "supervisor.log"), tail=8000)
+    marks = list(re.finditer(
+        r"supervisor: (starting loop|loop exited[^\n]*"
+        r"|not auto-repairable[^\n]*)", text))
+    if not marks:
+        return None
+    last = marks[-1].group(1).strip()
+    # "restarting loop" is reached via "supervisor: healthy after Ns;
+    # restarting loop", which does not match -- the next line's "supervisor:
+    # starting loop" is what marks the loop back up.
+    if last.startswith("starting loop"):
+        return None
+    return {"state": "finished" if "rc=0" in last else "stopped",
+            "reason": last}
+
+
 def _topology_track(track, runs_name, worklist_name):
     """One build loop, read from its own run directory.
 
@@ -1844,7 +1881,18 @@ def _topology_track(track, runs_name, worklist_name):
               else None)
     routine_exit = bool(exited and re.search(r"MAX_ITER|no open or unreviewed",
                                              exited.group(2)))
-    if exited:
+    supervisor = _topo_supervisor_state(runs)
+    if supervisor:
+        state = supervisor["state"]
+        alert = supervisor["reason"]
+        # What a finished track is actually waiting for. The loop pauses on
+        # exactly these two states, and the count is the checker's own.
+        waiting = states.get("needs-owner", 0) + states.get("blocked", 0)
+        if state == "finished":
+            alert = "finished cleanly" + (
+                "; %d row%s awaiting an owner decision"
+                % (waiting, "" if waiting == 1 else "s") if waiting else "")
+    elif exited:
         state = "finished" if routine_exit else "stopped"
         alert = exited.group(1) + ": " + exited.group(2).strip()
     elif hb_age is not None and hb_age > TOPO_SILENT_S:
