@@ -37,6 +37,60 @@ HOST = os.environ.get("VOXTERM_HOST", "127.0.0.1")
 PORT = int(os.environ.get("VOXTERM_PORT", "8081"))
 MAX_BYTES = 25 * 1024 * 1024
 
+WM_RUN_ROOT = os.path.expanduser(os.environ.get(
+    "VOXTERM_WM_RUN_ROOT",
+    "~/code/futon2/holes/labs/wm-contract/runs/RUN4-preparation-2026-09-10"))
+WM_RUN_STATUS_FILE = os.environ.get("VOXTERM_WM_RUN_STATUS_FILE", "run-visibility.json")
+WM_STALE_S = int(os.environ.get("VOXTERM_WM_STALE_S", "900"))
+
+def _wm_age(iso):
+    try:
+        import datetime
+        stamp = datetime.datetime.fromisoformat(str(iso).replace("Z", "+00:00"))
+        return None if stamp.tzinfo is None else max(0, int(time.time() - stamp.timestamp()))
+    except (TypeError, ValueError, OverflowError):
+        return None
+
+def wm_run_status():
+    """Fail-closed view of enacted evidence; never consults READY or Agency."""
+    path = os.path.join(WM_RUN_ROOT, WM_RUN_STATUS_FILE)
+    prep = any(os.path.isfile(os.path.join(WM_RUN_ROOT, n))
+               for n in ("PREPARATION.md", "SERIES.edn"))
+    if not os.path.isfile(path):
+        return {"ok": True, "state": "absent", "run_evidence": False, "message": "no run evidence", "preparation_evidence": prep, "trial_detail": "absent", "source": path}
+    try:
+        with open(path, encoding="utf-8") as h: doc = json.load(h)
+    except (OSError, ValueError) as exc:
+        return {"ok": False, "state": "invalid", "run_evidence": False, "message": "run evidence malformed", "error": str(exc), "preparation_evidence": prep, "source": path}
+    stages = {"planned", "dispatched", "working", "review", "blocked",
+              "failed", "complete", "accepted"}
+    results = {"pending", "passed", "failed", "blocked"}
+    age = _wm_age(doc.get("updated_at"))
+    valid = (doc.get("schema") == "wm/run-visibility-v1"
+             and isinstance(doc.get("run_id"), str) and bool(doc.get("run_id"))
+             and doc.get("stage") in stages and doc.get("result") in results
+             and isinstance(doc.get("trials"), list) and bool(doc.get("trials"))
+             and age is not None)
+    trials = []
+    if valid:
+        for raw in doc["trials"]:
+            tage = _wm_age(raw.get("updated_at")) if isinstance(raw, dict) else None
+            if not (isinstance(raw, dict)
+                    and isinstance(raw.get("trial_id"), str) and raw.get("trial_id")
+                    and raw.get("stage") in stages and raw.get("result") in results
+                    and tage is not None):
+                valid = False
+                break
+            t = {k: raw.get(k) for k in
+                 ("trial_id", "stage", "worker", "reviewer", "result",
+                  "blocked_reason", "updated_at")}
+            t.update(activity_age_s=tage, fresh=tage <= WM_STALE_S)
+            trials.append(t)
+    if not valid:
+        return {"ok": False, "state": "invalid", "run_evidence": False, "message": "run evidence malformed", "preparation_evidence": prep, "source": path}
+    stale = age > WM_STALE_S or any(not t["fresh"] for t in trials)
+    return {"ok": True, "state": "stale" if stale else doc["stage"], "run_evidence": True, "run_id": doc["run_id"], "stage": doc["stage"], "worker": doc.get("worker"), "reviewer": doc.get("reviewer"), "result": doc.get("result", "pending"), "blocked_reason": doc.get("blocked_reason"), "updated_at": doc["updated_at"], "activity_age_s": age, "fresh": not stale, "trials": trials, "preparation_evidence": prep, "source": path}
+
 
 def env_list(name, default):
     """Read a comma-separated VOXTERM setting, preserving configured order."""
@@ -2813,6 +2867,9 @@ class Handler(BaseHTTPRequestHandler):
             except Exception as e:
                 self._send(200, json.dumps({"ok": False, "error": str(e)}),
                            "application/json")
+        elif path == "/wm/status":
+            self._send(200, json.dumps(wm_run_status()), "application/json")
+
         elif path == "/apm/status":
             # The APM strip: filesystem truth about the frame loop, red when
             # it is stuck at a terminal position (Joe, 2026-09-06).

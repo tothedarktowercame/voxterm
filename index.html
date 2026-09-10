@@ -120,9 +120,14 @@
   /* --- APM strip: is the frame loop actually moving? Red when stuck at a
      terminal position (Joe, 2026-09-06). Same collapsed-line idiom as the
      backlog. --- */
-  #topo, #apm { font-family: ui-monospace, Menlo, monospace; font-size: 11.5px; color: var(--dim);
+  #wm, #topo, #apm { font-family: ui-monospace, Menlo, monospace; font-size: 11.5px; color: var(--dim);
          margin: -4px 0 10px; line-height: 1.4; overflow-x: auto; }
-  #topo .strip, #apm .strip { cursor: pointer; user-select: none; -webkit-user-select: none; }
+  #wm .strip, #topo .strip, #apm .strip { cursor: pointer; user-select: none; -webkit-user-select: none; }
+  #wm .n { color: var(--fg); } #wm .ok { color: var(--ok); }
+  #wm .warn { color: var(--accent, #d48700); }
+  #wm .bad { color: #ff8a94; font-weight: 600; }
+  #wm .strip.alarm { border: 1px solid #7a2b33; background: #241014; border-radius: 8px; padding: 2px 7px; }
+  #wm .item { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   #topo .n, #apm .n { color: var(--fg); }
   #topo .ok, #apm .ok { color: var(--ok); }
   #topo .warn, #apm .warn { color: var(--accent, #d48700); }
@@ -197,6 +202,7 @@
   <div id="procs"></div>
   <div id="apm"></div>
   <div id="topo"></div>
+  <div id="wm"></div>
   <div id="usage">usage …</div>
   <div id="backlog"></div>
   <div id="newKinds" aria-label="create agent"></div>
@@ -941,8 +947,26 @@ function refreshTopo() {
     .then(d => { topoData = d; renderTopo(); });
 }
 refreshTopo();
+const wmEl = $('#wm');
+let wmData = null, wmExpanded = false;
+function renderWm() {
+  const d = wmData;
+  if (!d) { wmEl.innerHTML = ''; return; }
+  if (d.ok === false) { wmEl.innerHTML = '<div class="strip alarm">WM · <span class="bad">' + esc(d.message || 'run evidence unreadable') + '</span></div>'; return; }
+  if (!d.run_evidence) { wmEl.innerHTML = '<div class="strip">' + (wmExpanded?'▾':'▸') + ' WM · <span class="warn">no run evidence</span>' + (d.preparation_evidence?' · preparation recorded separately':'') + '</div>'; return; }
+  const alarm = !d.fresh || d.stage === 'blocked' || d.stage === 'failed';
+  const bits = ['WM <span class="n">'+esc(d.run_id)+'</span>', esc(d.stage), '<span class="'+(d.fresh?'ok':'bad')+'">'+(d.fresh?'activity ':'stale ')+apmAge(d.activity_age_s)+'</span>', 'result '+esc(d.result)];
+  if(d.worker) bits.push('worker <span class="n">'+esc(d.worker)+'</span>'); if(d.reviewer) bits.push('reviewer <span class="n">'+esc(d.reviewer)+'</span>'); if(d.blocked_reason) bits.push('<span class="bad">'+esc(d.blocked_reason)+'</span>');
+  const out=['<div class="strip'+(alarm?' alarm':'')+'">'+(wmExpanded?'▾':'▸')+' '+bits.join(' · ')+'</div>'];
+  if(wmExpanded) (d.trials||[]).forEach(t=>out.push('<div class="item"><span class="n">'+esc(t.trial_id)+'</span> · '+esc(t.stage)+' · result '+esc(t.result)+(t.worker?' · worker '+esc(t.worker):'')+(t.reviewer?' · reviewer '+esc(t.reviewer):'')+' · <span class="'+(t.fresh?'ok':'bad')+'">'+(t.fresh?'activity ':'stale ')+apmAge(t.activity_age_s)+'</span>'+(t.blocked_reason?' · <span class="bad">'+esc(t.blocked_reason)+'</span>':'')+'</div>'));
+  wmEl.innerHTML=out.join('\n');
+}
+wmEl.addEventListener('click',()=>{wmExpanded=!wmExpanded;renderWm();});
+function refreshWm(){return fetch('wm/status',{cache:'no-store'}).then(r=>r.ok?r.json():{ok:false,message:'HTTP '+r.status}).catch(e=>({ok:false,message:String(e)})).then(d=>{wmData=d;renderWm();});}
+refreshWm();
 setInterval(refreshApm, 15000);
 setInterval(refreshTopo, 15000);
+setInterval(refreshWm, 15000);
 
 // A hidden tab has its timers throttled or suspended outright -- on mobile
 // especially -- so both strips freeze on their last render and keep showing it
@@ -952,9 +976,9 @@ setInterval(refreshTopo, 15000);
 // the page is visible again, so what is on screen is never older than the
 // glance that produced it.
 document.addEventListener('visibilitychange', () => {
-  if (!document.hidden) { refreshApm(); refreshTopo(); }
+  if (!document.hidden) { refreshApm(); refreshTopo(); refreshWm(); }
 });
-window.addEventListener('focus', () => { refreshApm(); refreshTopo(); });
+window.addEventListener('focus', () => { refreshApm(); refreshTopo(); refreshWm(); });
 
 // Backlog: what is QUEUED and what NEEDS JOE. Chips and procs show work in
 // progress; this shows the boards -- queued rows, blocked rows and what they
