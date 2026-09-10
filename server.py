@@ -2354,6 +2354,20 @@ def apm_status():
     elif waiting_substrate and (progress_s is None or progress_s > 300):
         state = "waiting"
         alert = "queue holding: substrate unavailable (provider limit?)"
+    elif wd_status == "halted":
+        # A halted watchdog stops observing, so its observed-at ages exactly
+        # like a dead one's. It is not dead: it stopped the coordinator and
+        # wrote why. On 2026-09-10 the strip read "watchdog silent 58m -- loop
+        # supervisor gone" over a record naming the halt (tick deadline
+        # exceeded) and the tick that caused it (queue plan mismatch).
+        halt = re.search(r":watchdog/halt-reason \{:code :([a-z-]+)", wd)
+        tick = re.search(r":regulator/last-result \{:ok false, :error/code :([a-z-]+)", wd)
+        state = "stopped"
+        alert = ("coordinator stopped by watchdog%s: %s%s"
+                 % (" %s" % time.strftime("%H:%MZ", time.gmtime(
+                        int(wd_observed.group(1)) / 1000)) if wd_observed else "",
+                    halt.group(1) if halt else "reason not recorded",
+                    " (last tick: %s)" % tick.group(1) if tick else ""))
     elif wd and observed_s is not None and observed_s > APM_WATCHDOG_SILENT_S:
         state = "stalled"
         alert = "watchdog silent %dm — loop supervisor gone" % (observed_s // 60)
