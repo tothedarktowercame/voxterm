@@ -2359,6 +2359,7 @@ def apm_status():
     # record says whether the quiet minutes are it.
     cascade = None
     cascade_seeds = None
+    cascade_where = ""
     cop = _apm_read(os.path.join(fdir, "live", "memory-cascade-operation.edn"))
     if cop:
         cst = re.search(r":status :([a-z-]+)", cop)
@@ -2366,6 +2367,12 @@ def apm_status():
         csd = re.search(r":seed-count (\d+)", cop)
         if csd:
             cascade_seeds = int(csd.group(1))
+        cph = re.search(r":phase :([a-z0-9-]+)", cop)
+        cat = re.search(r':finished-at "\d{4}-\d\d-\d\dT(\d\d:\d\d)', cop)
+        # The record is a past event on this frame; without where and when,
+        # a reload that still shows it reads as "not fixed" (f215).
+        cascade_where = " ".join(filter(None, [
+            cph and "at " + cph.group(1), cat and cat.group(1) + "Z"]))
     # A dead cascade doesn't stall the frame, but it changes what the frame is
     # measuring, so it stays an alarm even while phases advance (f187).
     #
@@ -2378,8 +2385,8 @@ def apm_status():
     if cascade == "failed" and state == "ok":
         state = "degraded"
         if cascade_seeds:
-            alert = ("cascade expansion failed: %d seeds served, not expanded"
-                     % cascade_seeds)
+            alert = ("cascade expansion failed%s: %d seeds served, not expanded"
+                     % (cascade_where and " " + cascade_where, cascade_seeds))
         elif cascade_seeds == 0:
             alert = "cascade failed: frame is running WITHOUT served memory"
         else:
