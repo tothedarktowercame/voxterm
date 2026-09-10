@@ -25,7 +25,7 @@ class ParkProjectionTest(unittest.TestCase):
                  "code": "solver-session-mismatch"},
                 {"frame": "f202", "problem": "m02A03", "phase": None,
                  "code": "solver-remediation-required"}],
-                "error": None}
+                "repair": None, "error": None}
             self.assertEqual(expected, server._apm_parked_decisions(directory))
             with patch.object(server.subprocess, "run", side_effect=AssertionError("cache missed")):
                 self.assertEqual(expected, server._apm_parked_decisions(directory))

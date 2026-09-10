@@ -2219,16 +2219,20 @@ def _apm_parked_decisions(cdir):
             result = subprocess.run(
                 ["bb", os.path.join(HERE, "apm_parked_projection.clj"), path],
                 capture_output=True, text=True, timeout=5, check=True)
-            projection = {"rows": json.loads(result.stdout), "error": None}
+            data = json.loads(result.stdout)
+            projection = {"rows": data["rows"], "repair": data["repair"],
+                          "error": None}
             _APM_PARK_CACHE[path] = (stamp, projection)
             return projection
     except FileNotFoundError as exc:
         # A campaign may legitimately have no queue yet; a missing bb is an error.
         if not os.path.exists(path):
-            return {"rows": [], "error": None}
-        return {"rows": [], "error": "parked queue unreadable: " + str(exc)}
-    except (OSError, subprocess.SubprocessError, ValueError) as exc:
-        return {"rows": [], "error": "parked queue unreadable: " + str(exc)}
+            return {"rows": [], "repair": None, "error": None}
+        return {"rows": [], "repair": None,
+                "error": "parked queue unreadable: " + str(exc)}
+    except (OSError, subprocess.SubprocessError, ValueError, KeyError) as exc:
+        return {"rows": [], "repair": None,
+                "error": "parked queue unreadable: " + str(exc)}
 
 
 def _apm_park_label(row):
@@ -2326,6 +2330,7 @@ def apm_status():
         pass
     rearms.sort(key=lambda r: r["at_ms"])
 
+    park_projection = _apm_parked_decisions(cdir)
     state, alert = "ok", None
     if systematic:
         state = "stopped"
@@ -2336,6 +2341,16 @@ def apm_status():
         state = "stopped"
         alert = ("f%d STOPPED %s" % (num, reason.group(1) if reason else "?")
                  + (" [" + inv.group(1).replace(":", "") + "]" if inv else ""))
+        repair = park_projection.get("repair") or {}
+        # A refuted statement is repaired, not a stop: the Guide rewrites it
+        # once and the same slot reruns, or the queue drops it and advances.
+        # f216/m03J02 (2026-09-10) read "STOPPED" while its repair ran.
+        if (reason and reason.group(1) == "statement-refuted"
+                and repair.get("frame") == "f%d" % num):
+            state = "waiting"
+            alert = ("f%d statement refuted; Guide repairing %s, then the "
+                     "slot reruns (dropped if the repair fails)"
+                     % (num, repair.get("problem") or "?"))
     elif waiting_substrate and (progress_s is None or progress_s > 300):
         state = "waiting"
         alert = "queue holding: substrate unavailable (provider limit?)"
@@ -2397,7 +2412,6 @@ def apm_status():
     # A parked frame does not stop the campaign -- the queue advances to the
     # next problem -- so `state` stays "ok" and the strip stayed silent while
     # decisions piled up. Surface them without pretending the campaign is down.
-    park_projection = _apm_parked_decisions(cdir)
     parked = park_projection["rows"]
     if parked and not alert:
         alert = "%d parked, awaiting decision: %s" % (
