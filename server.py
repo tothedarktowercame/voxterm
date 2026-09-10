@@ -47,7 +47,12 @@ def _wm_age(iso):
     try:
         import datetime
         stamp = datetime.datetime.fromisoformat(str(iso).replace("Z", "+00:00"))
-        return None if stamp.tzinfo is None else max(0, int(time.time() - stamp.timestamp()))
+        if stamp.tzinfo is None:
+            return None
+        delta = time.time() - stamp.timestamp()
+        # A small allowance avoids rejecting ordinary writer/reader clock
+        # jitter. A record clearly from the future is not fresh evidence.
+        return None if delta < -5 else max(0, int(delta))
     except (TypeError, ValueError, OverflowError):
         return None
 
@@ -62,13 +67,18 @@ def wm_run_status():
         with open(path, encoding="utf-8") as h: doc = json.load(h)
     except (OSError, ValueError) as exc:
         return {"ok": False, "state": "invalid", "run_evidence": False, "message": "run evidence malformed", "error": str(exc), "preparation_evidence": prep, "source": path}
+    if not isinstance(doc, dict):
+        return {"ok": False, "state": "invalid", "run_evidence": False,
+                "message": "run evidence malformed", "preparation_evidence": prep,
+                "source": path}
     stages = {"planned", "dispatched", "working", "review", "blocked",
               "failed", "complete", "accepted"}
     results = {"pending", "passed", "failed", "blocked"}
     age = _wm_age(doc.get("updated_at"))
     valid = (doc.get("schema") == "wm/run-visibility-v1"
              and isinstance(doc.get("run_id"), str) and bool(doc.get("run_id"))
-             and doc.get("stage") in stages and doc.get("result") in results
+             and isinstance(doc.get("stage"), str) and doc.get("stage") in stages
+             and isinstance(doc.get("result"), str) and doc.get("result") in results
              and isinstance(doc.get("trials"), list) and bool(doc.get("trials"))
              and age is not None)
     trials = []
@@ -77,7 +87,8 @@ def wm_run_status():
             tage = _wm_age(raw.get("updated_at")) if isinstance(raw, dict) else None
             if not (isinstance(raw, dict)
                     and isinstance(raw.get("trial_id"), str) and raw.get("trial_id")
-                    and raw.get("stage") in stages and raw.get("result") in results
+                    and isinstance(raw.get("stage"), str) and raw.get("stage") in stages
+                    and isinstance(raw.get("result"), str) and raw.get("result") in results
                     and tage is not None):
                 valid = False
                 break
