@@ -66,12 +66,12 @@ try:
         check("unreadable feed names no agent", cur[0].get("agent") is None,
               cur[0].get("agent"))
 
-    # 2. Feed readable and empty -- genuinely no agent turn, so in-process.
+    # 2. Empty feed provides no evidence of internal execution.
     server._apm_running_jobs = lambda: []
     timeline = server._apm_frame_timeline(fdir, CAMP, frame)
     cur = [p for p in (timeline or []) if p.get("current")]
-    check("empty feed still reads as in-process",
-          bool(cur) and cur[0].get("actor") == "in-process",
+    check("empty feed alone does not claim execution",
+          bool(cur) and cur[0].get("actor") == "unknown",
           cur[0].get("actor") if cur else timeline)
 
     # 3. Feed readable with this frame's own turn -- unchanged behaviour.

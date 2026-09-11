@@ -2038,7 +2038,19 @@ def _jvm_health():
         return None
 
 
-def _apm_frame_timeline(fdir, campaign, frame):
+def _apm_lifecycle(campaign):
+    """Durable authority, never inferred from a silent job/watchdog feed."""
+    registry = os.path.join(os.path.dirname(APM_ROOT), 'apm-coordinators', 'registry.edn')
+    try:
+        result = subprocess.run(
+            ['bb', os.path.join(HERE, 'apm_lifecycle_projection.clj'), registry, campaign],
+            capture_output=True, text=True, timeout=3, check=True)
+        return json.loads(result.stdout)
+    except Exception:
+        return None
+
+
+def _apm_frame_timeline(fdir, campaign, frame, lifecycle=None):
     """The frame as a sequence of phases with durations, each linked to the
     agent turn that ran it -- or named as in-process work when no agent did.
 
@@ -2085,21 +2097,22 @@ def _apm_frame_timeline(fdir, campaign, frame):
                 role = {"agent": a, "for_s": j.get("for_s")}
                 break
         cur["agent"] = role
-        # No agent turn means the loop itself is working -- name it, so a quiet
-        # stretch reads as in-process work rather than as nothing happening.
-        #
-        # But a feed we could not READ is neither. _apm_running_jobs returns
-        # None on any Agency failure and iterating that raised "'NoneType'
-        # object is not iterable" out of apm_status, so one 2.5s timeout
-        # replaced the whole strip with a Python error (Joe saw it 2026-09-09,
-        # during the topology loop's repair burst). Its own comment says the
-        # feed is "decoration only, never the verdict"; it had become the
-        # verdict. Guarding it alone would trade the crash for a quieter lie --
-        # "in-process" asserts the loop is working, which an unread feed does
-        # not establish -- so an unavailable feed says so.
-        cur["actor"] = ("agent" if role
-                        else "in-process" if jobs is not None
-                        else "unknown")
+        # Absence of an agent is not evidence of coordinator execution.
+        # An enabled coordinator's durable tick claim identifies claimed work;
+        # it does not prove that a thread is currently executing it.
+        # a disabled coordinator may still have a role draining independently.
+        lifecycle = lifecycle or {}
+        disabled = lifecycle.get('enabled') is False
+        cur['actor'] = ('agent' if role else 'stopped' if disabled
+                        else 'in-process' if lifecycle.get('enabled') is True
+                        and lifecycle.get('tick_claim') else 'waiting'
+                        if lifecycle.get('enabled') is True else 'unknown')
+        cur['draining'] = bool(disabled and role)
+        cur['duration_kind'] = 'phase age'
+        stopped = _apm_epoch(lifecycle.get('stopped_at')) if disabled else None
+        if stopped and not role:
+            cur['duration_s'] = max(0, int(stopped - _apm_epoch(cur['started_at'])))
+            cur['duration_kind'] = 'phase age at stop'
     return phases[-8:]
 
 
@@ -2179,19 +2192,26 @@ def _apm_phase_detail(fdir, phase):
 
 
 def _substrate_permits():
-    """futon1b's concurrency gate. Two permits total; when both are held every
-    authoritative read queues, and the promotion's per-read bound is 5s. That
-    is what timed out f188's post-publication verification, with the direct
-    buffers healthy -- so a green JVM row alone would have been misleading."""
+    """Global HTTP worker queue and expensive-read gate, not this APM's rank.
+    Missing instrumentation remains unknown, never a fabricated empty queue."""
     try:
-        with urlopen("http://127.0.0.1:7073/health", timeout=3) as r:
+        # Observe the worker queue through the independently provisioned
+        # health listener; joining the busy request queue defeats this probe.
+        with urlopen(os.environ.get('FUTON1B_HEALTH_URL', 'http://127.0.0.1:7072/health'), timeout=3) as r:
             t = r.read().decode("utf-8", "replace")
         tot = re.search(r':permits/total (\d+)', t)
         avail = re.search(r':permits/available (\d+)', t)
         holders = len(re.findall(r':age-ms (\d+)', t))
+        def number(key):
+            found = re.search(r':' + re.escape(key) + r' (\d+)', t)
+            return int(found.group(1)) if found else None
         return {"total": int(tot.group(1)) if tot else None,
                 "available": int(avail.group(1)) if avail else None,
                 "holders": holders,
+                "permit_waiters": number('permits/waiters'),
+                "requests_queued": number('requests/queued'),
+                "workers_active": number('workers/active'),
+                "workers_total": number('workers/total'),
                 "node_open": ":node-open? true" in t}
     except Exception:
         return None
@@ -2256,6 +2276,7 @@ def apm_status():
     if not campaign:
         return {"ok": False, "error": "no campaign dirs under " + APM_ROOT}
     cdir = os.path.join(APM_ROOT, campaign)
+    lifecycle = _apm_lifecycle(campaign)
     frames = _apm_frame_dirs(cdir, campaign)
     if not frames:
         return {"ok": True, "campaign": campaign, "state": "idle",
@@ -2332,7 +2353,11 @@ def apm_status():
 
     park_projection = _apm_parked_decisions(cdir)
     state, alert = "ok", None
-    if systematic:
+    if lifecycle and lifecycle.get('enabled') is False:
+        state = 'stopped'
+        alert = ('coordinator disabled; draining current work' if lifecycle.get('tick_claim')
+                 else 'coordinator stopped; automatic restart disabled')
+    elif systematic:
         state = "stopped"
         alert = "QUEUE STOPPED: systematic frame failure (3x identical)"
     elif last_type == "frame/stopped":
@@ -2439,7 +2464,8 @@ def apm_status():
             "watchdog": wd_status, "valid_wait": wd_valid_wait,
             "jvm": _jvm_health(),
             "phase_detail": _apm_phase_detail(fdir, phase),
-            "timeline": _apm_frame_timeline(fdir, campaign, "f%d" % num),
+            "lifecycle": lifecycle,
+            "timeline": _apm_frame_timeline(fdir, campaign, "f%d" % num, lifecycle),
             "substrate": _substrate_permits(),
             "cascade": cascade, "recent": recent,
             "banked": ["f%d" % n for n in banked[-3:]],

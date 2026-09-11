@@ -722,6 +722,14 @@ function apmAge(s) {
   return s >= 3600 ? Math.floor(s / 3600) + 'h' + Math.floor((s % 3600) / 60) + 'm'
        : s >= 60 ? Math.floor(s / 60) + 'm' : s + 's';
 }
+function apmActor(p) {
+  if (p.actor === 'agent' && p.agent)
+    return '<span class="n">' + esc(p.agent.agent) + '</span> '
+      + apmAge(p.agent.for_s) + (p.draining ? ' · draining' : '');
+  const labels = {'in-process': 'coordinator tick claimed', stopped: 'stopped',
+                  waiting: 'waiting; no active tick observed', unknown: 'activity unknown'};
+  return '<span class="warn">' + esc(labels[p.actor] || 'activity unknown') + '</span>';
+}
 function renderApm() {
   const d = apmData;
   if (!d) { apmEl.innerHTML = ''; return; }
@@ -788,16 +796,15 @@ function renderApm() {
     // phase is actually doing when it says so.
     const cur = (d.timeline || []).filter(p => p.current)[0];
     if (cur) {
-      bits.push(cur.actor === 'agent' && cur.agent
-        ? '<span class="n">' + esc(cur.agent.agent) + '</span> ' + apmAge(cur.agent.for_s)
-        : cur.actor === 'unknown'
-        ? '<span class="warn">agent feed unreadable</span> ' + apmAge(cur.duration_s)
-        : '<span class="warn">in-process</span> ' + apmAge(cur.duration_s));
+      bits.push(apmActor(cur) + ' · ' + esc(cur.duration_kind || 'phase age')
+                + ' ' + apmAge(cur.duration_s));
     }
     const pd = d.phase_detail;
     if (pd && pd.stage) {
       const retrying = pd.retry_attempt != null && pd.retry_max != null;
-      bits.push('<span class="warn">' + esc(pd.stage) + '</span>'
+      const stageLabel = pd.stage === 'awaiting-transport-retry'
+        ? 'waiting to retry store operation' : pd.stage;
+      bits.push('<span class="warn">' + esc(stageLabel) + '</span>'
                 + (retrying ? ' retry ' + esc(pd.retry_attempt) + '/' + esc(pd.retry_max) : '')
                 + (pd.retry_in_s != null && pd.retry_in_s > 0
                      ? ' in ' + apmAge(pd.retry_in_s) : ''));
@@ -807,6 +814,10 @@ function renderApm() {
   const running = (d.jobs || []).map(j =>
     '<span class="n">' + esc(j.agent) + '</span> ' + apmAge(j.for_s));
   if (running.length && !red) bits.push(running.join(' · '));
+  if (d.substrate && d.substrate.requests_queued > 0)
+    bits.push('<span class="warn">store-wide: ' + d.substrate.requests_queued
+              + ' requests queued; ' + (d.substrate.workers_active ?? '?') + '/'
+              + (d.substrate.workers_total ?? '?') + ' HTTP workers busy</span>');
   const out = ['<div class="strip' + (red ? ' alarm' : '') + '">'
                + (apmExpanded ? '▾' : '▸') + ' ' + bits.join(' · ') + '</div>'];
   if (apmExpanded) {
@@ -820,12 +831,8 @@ function renderApm() {
       const tl = d.timeline.map(p => {
         const dur = apmAge(p.duration_s);
         if (!p.current) return esc(p.phase) + ' ' + dur;
-        const who = p.actor === 'agent' && p.agent
-          ? '<span class="n">' + esc(p.agent.agent) + '</span> ' + apmAge(p.agent.for_s)
-          : p.actor === 'unknown'
-          ? '<span class="warn">agent feed unreadable</span>'
-          : '<span class="warn">in-process</span>';
-        return '<span class="ok">' + esc(p.phase) + ' ' + dur + '</span> · ' + who;
+        return esc(p.phase) + ' · ' + esc(p.duration_kind || 'phase age')
+          + ' ' + dur + ' · ' + apmActor(p);
       });
       rows.push('frame: ' + tl.join(' → '));
     }
@@ -841,7 +848,11 @@ function renderApm() {
       const sat = (av === 0 && tt);
       rows.push('substrate: permits <span class="' + (sat ? 'bad' : 'ok') + '">'
                 + (av == null ? '?' : av) + '/' + (tt || '?') + ' free</span>'
-                + ' · ' + sb.holders + ' in flight'
+                + ' · ' + sb.holders + ' reads in flight'
+                + ' · read-permit waiters ' + (sb.permit_waiters ?? '?')
+                + ' · HTTP workers ' + (sb.workers_active ?? '?') + '/' + (sb.workers_total ?? '?')
+                + ' busy · requests queued ' + (sb.requests_queued ?? '?')
+                + ' (store-wide; APM queue position unknown)'
                 + (sb.node_open ? '' : ' · <span class="bad">node closed</span>'));
     }
     if (d.jvm) {
