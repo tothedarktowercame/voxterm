@@ -975,7 +975,9 @@ function renderWm() {
   const historical = (d.trials || []).find(t => t.historical_execution);
   const h = historical && historical.historical_execution;
   const target = hasQueue ? q.target.entry_id : (h ? h.repair_id : d.run_id);
-  const label = String(target || 'no run recorded').replace(/-/g, ' ');
+  const label = h ? 'Repair verification' :
+    (/^u88-.*task$/.test(String(target)) ? 'U88 task' :
+     String(target || 'no run recorded').replace(/-/g, ' '));
   const invalid = d.ok === false || q.state === 'invalid' || q.state === 'absent';
   const failed = ['failed', 'blocked'].includes(d.stage);
   let status = h ? 'verification completed · awaiting successor' :
@@ -1016,13 +1018,13 @@ function renderWm() {
     if (invalid) out.push('<div class="item">' + esc(d.message || 'Queue observation unavailable') + '</div>');
     if (hasQueue) {
       const roles = q.assigned_roles || {}, flight = q.in_flight || {};
-      out.push('<div class="item">Queue ' + esc(q.queue_id) + ' · ' + esc(qs) +
+      out.push('<div class="item">Queue ' + esc(qs) +
         (q.hold_reason ? ' · ' + esc(q.hold_reason) : '') + '</div>');
-      if (flight['click-id']) out.push('<div class="item">Click ' + esc(flight['click-id']) + '</div>');
+      if (flight['click-id']) out.push('<details class="item"><summary>Technical identifiers</summary>Queue ' + esc(q.queue_id) + '<br>Click ' + esc(flight['click-id']) + '</details>');
       if (roles.author) out.push('<div class="item">Recorded roles: author ' + esc(roles.author) +
         ' · reviewer ' + esc(roles.reviewer || 'unknown') + ' (assignments, not active-worker evidence)</div>');
     }
-    if (h) out.push('<div class="item">Run ' + esc(h.run_id) + ' · requested ' +
+    if (h) out.push('<div class="item">Requested ' +
       esc(historical.trial_id) + ' not enacted · task result pending</div>');
     else if (d.run_evidence) out.push('<div class="item">Requested task ' +
       esc((d.trials || [])[0]?.trial_id || d.run_id) + ' · result ' + esc(d.result || 'unknown') + '</div>');
