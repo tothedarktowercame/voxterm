@@ -984,8 +984,19 @@ function renderWm() {
   if (invalid && !observation) status = 'evidence unavailable';
   const age = hasQueue ? q.observation_age_s : d.activity_age_s;
   const fresh = hasQueue ? q.fresh : d.fresh;
-  const parts = ['WM', esc(label), esc(status)];
-  if (age != null) parts.push((fresh ? 'observed ' : 'last observed ') + apmAge(age) + ' ago');
+  const workJob = d.work?.job;
+  const preparing = workJob && ['running', 'queued'].includes(workJob.state);
+  const parts = ['WM', esc(label)];
+  if (preparing) {
+    parts.push('repair preparation ' + esc(workJob.state) +
+      (workJob.owner ? ' · ' + esc(workJob.owner) : ''));
+    if (workJob.event_age_s != null)
+      parts.push('job event ' + apmAge(workJob.event_age_s) + ' ago');
+    parts.push('trial queue ' + esc(qs || 'unknown'));
+    if (observation) parts.push('last run incomplete');
+  } else parts.push(esc(status));
+  if (age != null && !preparing)
+    parts.push((observation ? 'run ended ' : (fresh ? 'observed ' : 'last observed ')) + apmAge(age) + ' ago');
   // Assignment is not evidence that a worker is currently executing.
   if (hasQueue && (q.active_actors || []).length)
     parts.push('active ' + q.active_actors.map(esc).join(', '));
@@ -993,6 +1004,9 @@ function renderWm() {
   const out = ['<div class="strip' + (invalid || failed || observation ? ' alarm' : '') + '">' +
     (wmExpanded ? '▾ ' : '▸ ') + parts.join(' · ') + '</div>'];
   if (wmExpanded) {
+    if (workJob) out.push('<div class="item">Preparation job ' + esc(workJob.id) +
+      ' · ' + esc(workJob.state) + ' · separate from WM trial execution</div>');
+    if (observation) out.push('<div class="item">Last run: ' + esc(observation.error) + '</div>');
     if (observation) {
       out.push('<div class="item">Coordinator readback · ' + esc(observation.observed_at) +
         ' · no verified task terminal</div>');
