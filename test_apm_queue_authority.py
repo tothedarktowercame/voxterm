@@ -57,6 +57,32 @@ class QueueAuthorityTest(unittest.TestCase):
             self.assertTrue(all(r['end'] == 'queued to resume; not terminal'
                                 for r in result['recent']))
 
+    def test_completed_frame_warning_hold_overrides_stale_halt_and_newer_frame(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            frames = []
+            for n in (224, 225):
+                directory = root / str(n)
+                directory.mkdir()
+                (directory / 'ledger.edn').write_text(
+                    '{:event/type :frame/closed :problem-id "p%d"}' % n)
+                frames.append((n, str(directory)))
+            hold = dict(frame='f224', problem='p224', warning_count=2,
+                        max_elapsed_ms=5600, repair_agent='codex-16', repair_job='repair1')
+            with patch.object(server, '_apm_active_campaign', return_value='c'), \
+                 patch.object(server, '_apm_lifecycle', return_value={
+                     'active_frame': None, 'enabled': False, 'store_read_hold': hold}), \
+                 patch.object(server, '_apm_frame_dirs', return_value=frames), \
+                 patch.object(server, '_apm_running_jobs', return_value=[]), \
+                 patch.object(server, '_jvm_health', return_value=None), \
+                 patch.object(server, '_substrate_permits', return_value=None), \
+                 patch.object(server, '_apm_parked_decisions', return_value={'rows': [], 'error': None}):
+                result = server.apm_status()
+            self.assertEqual('f224', result['frame'])
+            self.assertEqual('waiting', result['state'])
+            self.assertIn('queue held for 2 slow store reads (max 5.6s)', result['alert'])
+            self.assertIn('codex-16 [repair1]', result['alert'])
+
     def test_missing_active_frame_is_an_error_not_a_fallback(self):
         with patch.object(server, '_apm_active_campaign', return_value='c'), \
              patch.object(server, '_apm_lifecycle', return_value={'active_frame': 'f224'}), \

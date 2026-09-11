@@ -2344,7 +2344,9 @@ def apm_status():
         return {"ok": True, "campaign": campaign, "state": "idle",
                 "alert": None, "detail": "campaign has no frames yet",
                 "recent": [], "jobs": _apm_running_jobs()}
-    active_frame = (lifecycle or {}).get('active_frame')
+    store_read_hold = (lifecycle or {}).get('store_read_hold')
+    active_frame = ((lifecycle or {}).get('active_frame')
+                    or (store_read_hold or {}).get('frame'))
     selected = next(((n, d) for n, d in frames if 'f%d' % n == active_frame), None)
     if active_frame and selected is None:
         return {"ok": False, "error": "active queue frame %s has no frame directory" % active_frame}
@@ -2428,7 +2430,15 @@ def apm_status():
 
     park_projection = _apm_parked_decisions(cdir)
     state, alert = "ok", None
-    if lifecycle and lifecycle.get('enabled') is False:
+    if store_read_hold:
+        state = 'waiting'
+        alert = ('frame completed; queue held for %d slow store reads (max %.1fs); %s'
+                 % (store_read_hold.get('warning_count', 0),
+                    store_read_hold.get('max_elapsed_ms', 0) / 1000,
+                    ('repair dispatched to %s [%s]' %
+                     (store_read_hold.get('repair_agent'), store_read_hold['repair_job'])
+                     if store_read_hold.get('repair_job') else 'repair dispatch pending or failed')))
+    elif lifecycle and lifecycle.get('enabled') is False:
         state = 'stopped'
         alert = ('coordinator disabled; draining current work' if lifecycle.get('tick_claim')
                  else 'coordinator stopped; automatic restart disabled')
@@ -2556,6 +2566,7 @@ def apm_status():
                                   retry_in_s=retry_detail.get('retry_in_s'))
                              if retry_wait else _apm_phase_detail(fdir, phase)),
             "retry_wait": retry_detail,
+            "store_read_hold": store_read_hold,
             "lifecycle": lifecycle,
             "timeline": _apm_frame_timeline(fdir, campaign, "f%d" % num, lifecycle),
             "substrate": _substrate_permits(),

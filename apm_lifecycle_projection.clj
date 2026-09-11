@@ -19,6 +19,13 @@
              :active_frame (get-in queue [:active :frame :frame/id])
              :resumption_frames (mapv #(get-in % [:frame :frame/id]) (:resumption-queue queue))
              :queue_status (:status queue)
+             :store_read_hold
+             (when-let [hold (:store-read/hold queue)]
+               {:id (:hold/id hold) :frame (:frame/id hold)
+                :problem (:problem/id hold)
+                :warning_count (count (:warnings hold))
+                :max_elapsed_ms (reduce max 0 (keep :elapsed-ms (:warnings hold)))
+                :repair_agent (:repair/agent-id hold) :repair_job (:dispatch/id hold)})
              :retry (when retry {:kind (:kind retry)
                                  :not_before_ms (:not-before-ms retry)
                                  :scheduled_at_ms (:scheduled-at-ms retry)
