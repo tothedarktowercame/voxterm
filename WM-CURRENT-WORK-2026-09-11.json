@@ -1,0 +1,39 @@
+{
+  "schema": "voxterm/wm-work-v1",
+  "updated_at": "2026-09-11T17:57:00.635369+00:00",
+  "summary": "Preparing the next run with Zai; no new WM trial is executing.",
+  "next_step": "Establish Zai-authored/reviewed verification that satisfies the real actor-binding checks, then validate and install the next one-entry packet.",
+  "job_id": "invoke-1789148820027-20225-df620e28",
+  "issues": [
+    {
+      "title": "Next run: successor-v2 selection repair",
+      "status": "Source and packet tests passed; staffing transition pending",
+      "detail": "The old fixed repair candidate targeted 057 while another stop-line was open. Applicability, replay and exact-click recovery fixes now pass. The current verifier records Codex-10/Codex-12; simply assigning Zai-2/Zai-1 does not select it.",
+      "evidence": "5f3a06e3: paired 2/42, terminal 11/62, packet 1/30; f6a5dd89: 12 runtime + 8 packet hashes; 09bf1801: real actor check."
+    },
+    {
+      "title": "Zai preparation job",
+      "status": "Assigned to Zai-2; see live Agency status above",
+      "detail": "First shell reads were rejected by its read-only peripheral. Later file-list tool calls executed. No staffing artifact or validated Zai configuration has yet been received. Running does not mean useful progress or a WM worker dispatch.",
+      "evidence": "invoke-1789148820027-20225-df620e28; observed rejected reads and later list_files event."
+    },
+    {
+      "title": "Later initialization collision (38690)",
+      "status": "Separate qualification still required before repair discharge",
+      "detail": "Disposable executions reused the same cohort label and local attempt across different roots. Versioned execution authority now distinguishes roots; this separate repair still needs its own qualification and independent evidence.",
+      "evidence": "Futon2 810be2a9; final source review 5f3a06e3. Earlier receipts do not qualify this separate repair."
+    },
+    {
+      "title": "U88 target work",
+      "status": "Not yet executed; behind the remaining stop-lines",
+      "detail": "Historical admissions recorded real verification work, not enactment of the requested U88 task. A distinct qualifying production successor remains required for repair resolution.",
+      "evidence": "Strict historical bundle for initialization click wm-click-e348efc5-96b3-4a05-96de-f0f867e9d38e; current queue held."
+    },
+    {
+      "title": "Last initialization admission",
+      "status": "Completed historical verification; queue held; capacity consumed",
+      "detail": "The old observation timestamp belongs to that completed run. It is not a timer for the current preparation work, and the old attempt will not be reset or repeated.",
+      "evidence": "run 5b51477f-74f2-4a4d-aca7-522bd7047d70; receipt b3bc5a93."
+    }
+  ]
+}

@@ -24,6 +24,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 from urllib.request import Request, urlopen
 from wm_queue_status import read_queue_status
+from wm_work_status import read_work_status
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 WHISPER = os.path.expanduser("~/tools/whisper/whisper-cli")
@@ -169,6 +170,7 @@ def wm_run_status():
         result["queue"] = read_queue_status(path, _wm_age, WM_STALE_S)
     except (OSError, ValueError) as exc:
         result["queue"] = {"state": "invalid", "configured": True, "error": str(exc)}
+    result["work"] = read_work_status(os.path.expanduser("~/.config/voxterm/wm-work.json"), _wm_age)
     return result
 
 

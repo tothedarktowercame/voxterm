@@ -965,23 +965,33 @@ function renderWmQueue(q) {
   if(q.state==='invalid' || q.state==='absent') return '<div class="strip alarm">WM queue · '+esc(q.state==='invalid'?'observation invalid':'observation missing')+'</div>';
   const target=q.target, roles=q.assigned_roles, flight=q.in_flight;
   const parts=['WM queue '+esc(q.queue_id),esc(q.controller_state)];
-  if(!q.fresh) parts.push('observation stale '+apmAge(q.observation_age_s));
+  if(!q.fresh) parts.push('last queue observation '+apmAge(q.observation_age_s)+' ago');
   if(target) parts.push('entry '+esc(target.entry_id),'series '+esc(target.series_id));
   if(roles) parts.push('assigned author '+esc(roles.author),'reviewer '+esc(roles.reviewer));
-  if(flight && flight['click-id']) parts.push('in-flight click '+esc(flight['click-id']));
+  if(flight && flight['click-id']) parts.push((q.controller_state==='running'?'in-flight click ':'retained click ')+esc(flight['click-id']));
   if(q.hold_reason) parts.push(esc(q.hold_reason));
   parts.push('active worker evidence unavailable');
   return '<div class="strip'+(!q.fresh||q.controller_state==='held'?' alarm':'')+'">'+parts.join(' · ')+'</div>';
 }
+function renderWmWork(w) {
+  if (!w || w.state==='unconfigured') return '<div class="strip">WM preparation · no current work note</div>';
+  if(w.state==='invalid') return '<div class="strip alarm">WM preparation · work note unreadable</div>';
+  const j=w.job;
+  let out='<div class="strip"><b>WM current work (preparation)</b> · '+esc(w.summary)+'<br>Next: '+esc(w.next_step)+'<br>Coordinator note '+apmAge(w.note_age_s)+' old';
+  if(j) out+='<br>Agency job '+esc(j.id)+' · owner '+esc(j.owner||'unknown')+' · '+esc(j.state)+' · last event '+(j.event_age_s==null?'unknown':apmAge(j.event_age_s)+' ago')+(j.observation_error?' · '+esc(j.observation_error):'');
+  out+='</div>';
+  (w.issues||[]).forEach(i=>{out+='<div class="item"><b>'+esc(i.title)+'</b> · '+esc(i.status)+'<br>'+esc(i.detail)+'<br><small>Evidence: '+esc(i.evidence)+'</small></div>';});
+  return out;
+}
 function renderWm() {
   const d = wmData;
   if (!d) { wmEl.innerHTML = ''; return; }
-  const queueHtml=renderWmQueue(d.queue);
+  const queueHtml=renderWmWork(d.work)+renderWmQueue(d.queue);
   if (d.ok === false) { wmEl.innerHTML = queueHtml+'<div class="strip alarm">WM · <span class="bad">' + esc(d.message || 'run evidence unreadable') + '</span></div>'; return; }
   if (!d.run_evidence) { wmEl.innerHTML = queueHtml+'<div class="strip">' + (wmExpanded?'▾':'▸') + ' WM · <span class="warn">no run evidence</span>' + (d.preparation_evidence?' · preparation recorded separately':'') + '</div>'; return; }
   const alarm = !d.fresh || d.stage === 'blocked' || d.stage === 'failed';
   const historical = (d.trials||[]).filter(t=>t.historical_execution);
-  const bits = ['WM <span class="n">'+esc(d.run_id)+'</span>', historical.length ? 'execution completed · awaiting successor validation' : esc(d.stage), '<span class="'+(d.fresh?'ok':'bad')+'">'+(d.fresh?'observed ':'observation stale ')+apmAge(d.activity_age_s)+'</span>', 'result '+esc(d.result)];
+  const bits = ['WM last execution <span class="n">'+esc(d.run_id)+'</span>', historical.length ? 'execution completed · awaiting successor validation' : esc(d.stage), '<span class="'+(d.fresh?'ok':'bad')+'">'+(d.fresh?'observed ':'observation stale ')+apmAge(d.activity_age_s)+'</span>', 'result '+esc(d.result)];
   historical.forEach(t=>bits.push('repair <span class="n">'+esc(t.actual_action.repair_id)+'</span> · no active worker'));
   if(d.worker) bits.push('worker <span class="n">'+esc(d.worker)+'</span>'); if(d.reviewer) bits.push('reviewer <span class="n">'+esc(d.reviewer)+'</span>'); if(d.blocked_reason) bits.push('<span class="bad">'+esc(d.blocked_reason)+'</span>');
   const out=['<div class="strip'+(alarm?' alarm':'')+'">'+(wmExpanded?'▾':'▸')+' '+bits.join(' · ')+'</div>'];
