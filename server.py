@@ -1761,6 +1761,36 @@ def _apm_frame_dirs(cdir, campaign):
     return sorted(frames)
 
 
+_APM_OUTCOMES = {}
+_APM_OUTCOMES_STAMP = None
+_APM_OUTCOMES_LOCK = threading.Lock()
+
+
+def _apm_receipt_outcomes(fdirs):
+    global _APM_OUTCOMES_STAMP, _APM_OUTCOMES
+    with _APM_OUTCOMES_LOCK:
+        stamp = []
+        for directory in fdirs:
+            for rel in ("terminal/frame-terminal.edn", "terminal/problem-bank.edn", "live/close-frame.edn"):
+                path = os.path.join(directory, rel)
+                try:
+                    st = os.stat(path)
+                    stamp.append((path, st.st_ino, st.st_mtime_ns, st.st_size))
+                except FileNotFoundError:
+                    stamp.append((path, None))
+        if stamp != _APM_OUTCOMES_STAMP:
+            try:
+                result = subprocess.run(
+                    ["bb", os.path.join(HERE, "apm_outcomes.clj"), *fdirs],
+                    capture_output=True, text=True, timeout=10, check=True)
+                _APM_OUTCOMES = json.loads(result.stdout)
+                _APM_OUTCOMES_STAMP = stamp
+            except (OSError, subprocess.SubprocessError, ValueError):
+                _APM_OUTCOMES = {d: {"end": "outcome unreadable", "banked": False} for d in fdirs}
+                _APM_OUTCOMES_STAMP = None
+        return _APM_OUTCOMES
+
+
 def _apm_frame_brief(num, fdir):
     """History row from bounded reads: the problem and how the frame ended."""
     # Single events run to tens of KB (an :event/body carries whole
@@ -1770,6 +1800,7 @@ def _apm_frame_brief(num, fdir):
     prob = re.search(r':problem-id "([^"]+)"', head)
     types = re.findall(r":event/type :([a-z/-]+)", tail)
     last = types[-1] if types else None
+    outcome = _APM_OUTCOMES.get(fdir, {})
     end = last or "?"
     if last == "frame/stopped":
         reason = re.search(r":reason :([a-z-]+)", tail)
@@ -1781,6 +1812,7 @@ def _apm_frame_brief(num, fdir):
     elif last == "frame/advanced":
         trans = re.findall(r":from :[a-z0-9-]+, :to :([a-z0-9-]+)", tail)
         end = "parked@" + (trans[-1] if trans else "?")
+    end = outcome.get("end") or end
     return {"frame": "f%d" % num,
             "problem": prob.group(1) if prob else "?",
             "end": end}
@@ -1789,9 +1821,7 @@ def _apm_frame_brief(num, fdir):
 def _apm_banked(fdir):
     """Closed-and-banked, not just possessing a terminal/ dir: voided frames
     write a frame-void certificate there too (f82, f105, ... 2026-09-06)."""
-    head = _apm_read(os.path.join(fdir, "terminal", "frame-terminal.edn"),
-                     head=2000)
-    return ":frame/result :closed" in head
+    return bool(_APM_OUTCOMES.get(fdir, {}).get("banked", False))
 
 
 def _apm_running_jobs():
@@ -2446,6 +2476,7 @@ def apm_status():
         else:
             alert = "cascade failed: served memory unknown (no seed count)"
 
+    _apm_receipt_outcomes([d for _, d in frames])
     recent = [_apm_frame_brief(n, d) for n, d in frames[-6:-1]][::-1]
     banked = [n for n, d in frames if _apm_banked(d)]
     # A parked frame does not stop the campaign -- the queue advances to the
