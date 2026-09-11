@@ -115,8 +115,35 @@ def wm_run_status():
             t = {k: raw.get(k) for k in
                  ("trial_id", "stage", "worker", "reviewer", "result",
                   "blocked_reason", "updated_at")}
+            if "historical_execution" in raw:
+                execution = raw.get("historical_execution")
+                action, requested, roles = (raw.get(k) for k in
+                                           ("actual_action", "requested_task", "assigned_roles"))
+                if not (isinstance(execution, dict)
+                        and execution.get("kind") == "historical-repair-verification"
+                        and execution.get("status") == "completed"
+                        and execution.get("resolution_status") == "awaiting-successor-validation"
+                        and all(isinstance(execution.get(k), str) and execution[k].strip()
+                                for k in ("click_id", "run_id", "controller_attempt_id",
+                                          "runner_attempt_id", "cohort_id", "repair_id", "verification_id"))
+                        and isinstance(action, dict)
+                        and action.get("type") == "revalidate-historical-repair"
+                        and action.get("repair_id") == execution["repair_id"]
+                        and isinstance(requested, dict)
+                        and requested.get("trial_id") == raw["trial_id"]
+                        and requested.get("status") == "authenticated-not-enacted"
+                        and isinstance(roles, dict) and roles.get("active_workers") == []
+                        and all(isinstance(roles.get(k), str) and roles[k].strip()
+                                for k in ("author", "reviewer", "repair_reviewer"))
+                        and raw["stage"] == "review" and raw["result"] == "pending"):
+                    valid = False
+                    break
+                t.update(historical_execution=execution, actual_action=action,
+                         requested_task=requested, assigned_roles=roles)
             t.update(activity_age_s=tage, fresh=tage <= WM_STALE_S)
             trials.append(t)
+    if valid and any(t.get("historical_execution") for t in trials):
+        valid = doc["result"] != "passed" and doc["stage"] not in {"complete", "accepted"}
     if not valid:
         return {"ok": False, "state": "invalid", "run_evidence": False, "message": "run evidence malformed", "preparation_evidence": prep, "source": path}
     stale = age > WM_STALE_S or any(not t["fresh"] for t in trials)
