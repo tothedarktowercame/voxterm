@@ -2217,79 +2217,40 @@ def _apm_frame_timeline(fdir, campaign, frame, lifecycle=None):
     return phases[-8:]
 
 
+_APM_PHASE_DETAILS = {}
+
+
 def _apm_phase_detail(fdir, phase):
-    """What the CURRENT phase is doing, from its own live/<phase>.edn.
-
-    Joe, 2026-09-07: "right now it just says... Progress nine minutes ago, and
-    that makes me nervous when, in fact, it's actually working, doing something
-    useful." Elapsed-since-last-progress is a lagging measure: a phase can be
-    working hard for ten minutes and move nothing a ledger would notice. The
-    phase files carry the live detail -- stage, retry budget, and the finding
-    that caused the last failure -- so read that instead of inferring from
-    silence.
-
-    Read the LAST error and pair its message by proximity, never the first
-    match of each field independently. A phase file is an append-only history,
-    so a plain re.search returns the OLDEST error in it and keeps returning it
-    forever. On 2026-09-08 f193 rendered :error/code from byte 3529 beside
-    :error/message from byte 31648 -- 28KB and many events apart -- producing
-    "report-edn-lint-failed / Atomic memory assertion transport failed", a pair
-    that never occurred. Joe read that chimera as a recurring error class over
-    several hours and was chasing a rendering artifact. The real terminal error
-    sat at byte 31191, :live-job-transport-retry-exhausted, and was never shown.
-
-    Also carry the file's age. This detail described a frame that had been dead
-    for an hour while the strip reported state ok, so a stale detail must say
-    so rather than present as current.
-    """
+    """Current checkpoint fields, never errors found inside retained history."""
     if not phase:
         return None
     path = os.path.join(fdir, "live", phase + ".edn")
-    raw = _apm_read(path, tail=20000)
-    if not raw:
-        return None
     try:
-        age_s = int(time.time() - os.path.getmtime(path))
+        stat = os.stat(path)
     except OSError:
-        age_s = None
+        return None
+    stamp = (stat.st_mtime_ns, stat.st_size)
+    cached = _APM_PHASE_DETAILS.get(path)
+    try:
+        if not cached or cached[0] != stamp:
+            result = subprocess.run(
+                ['bb', os.path.join(HERE, 'apm_phase_detail.clj'), path],
+                capture_output=True, text=True, timeout=3, check=True)
+            value = json.loads(result.stdout)
+            if len(_APM_PHASE_DETAILS) > 128:
+                _APM_PHASE_DETAILS.clear()
+            _APM_PHASE_DETAILS[path] = (stamp, value)
+        else:
+            value = cached[1]
+        detail = dict(value, detail_age_s=max(0, int(time.time() - stat.st_mtime)))
+        deadline = detail.pop('retry_not_before_ms', None)
+        detail['retry_in_s'] = (int(deadline / 1000 - time.time())
+                                if deadline is not None else None)
+        return detail
+    except Exception:
+        return {"stage": "status-unreadable", "error_code": None,
+                "error_message": "Cannot read the current phase checkpoint"}
 
-    def last(pat):
-        ms = list(re.finditer(pat, raw))
-        return ms[-1] if ms else None
-
-    def field(k, quoted=False):
-        m = last(r':%s\s+"([^"]*)"' % k if quoted else r':%s\s+([^\s,}\]]+)' % k)
-        return m.group(1) if m else None
-
-    stage = field("stage")
-    att = field(r"transport-retry/attempt")
-    mx = field(r"transport-retry/max-attempts")
-    nb = field(r"transport-retry/not-before-ms")
-    rk = field(r"repair/kind")
-    ra = field(r"repair/attempts")
-    rm = field(r"repair/max-attempts")
-
-    # Anchor on the last error, then take the message nearest it. Unpaired is
-    # reported as None: a message from an unrelated event is worse than none.
-    err = None
-    msg = None
-    em = last(r':error/code\s+([^\s,}\]]+)')
-    if em:
-        err = em.group(1)
-        best = None
-        for mm in re.finditer(r':error/message\s+"([^"]{0,160})"', raw):
-            d = abs(mm.start() - em.start())
-            if d <= 2000 and (best is None or d < best[0]):
-                best = (d, mm.group(1))
-        msg = best[1] if best else None
-
-    retry_in = None
-    if nb and nb.isdigit():
-        retry_in = int((int(nb) - time.time() * 1000) / 1000)
-    return {"stage": stage, "error_code": err, "error_message": msg,
-            "detail_age_s": age_s,
-            "retry_attempt": att, "retry_max": mx, "retry_in_s": retry_in,
-            "repair_kind": rk, "repair_attempts": ra, "repair_max": rm}
 
 
 def _substrate_permits():
@@ -2383,7 +2344,11 @@ def apm_status():
         return {"ok": True, "campaign": campaign, "state": "idle",
                 "alert": None, "detail": "campaign has no frames yet",
                 "recent": [], "jobs": _apm_running_jobs()}
-    num, fdir = frames[-1]
+    active_frame = (lifecycle or {}).get('active_frame')
+    selected = next(((n, d) for n, d in frames if 'f%d' % n == active_frame), None)
+    if active_frame and selected is None:
+        return {"ok": False, "error": "active queue frame %s has no frame directory" % active_frame}
+    num, fdir = selected or frames[-1]
     ledger = _apm_read(os.path.join(fdir, "ledger.edn"))
 
     prob = re.search(r':problem-id "([^"]+)"', ledger)
@@ -2429,8 +2394,17 @@ def apm_status():
     # The systematic brake (three consecutive identical role-terminal parks
     # or voids) stops the whole queue; that is a red state in its own right,
     # not a slow-burning stall.
-    systematic = ":failed-systematic-frame-failure" in _apm_read(
-        os.path.join(cdir, "queue-state.edn"))
+    systematic = (lifecycle or {}).get('queue_status') == 'failed-systematic-frame-failure'
+    retry = (lifecycle or {}).get('retry')
+    retry_wait = bool(retry and (lifecycle or {}).get('enabled') is True
+                      and (lifecycle or {}).get('status') == 'running'
+                      and not (lifecycle or {}).get('tick_claim'))
+    retry_detail = None
+    if retry_wait:
+        wake_ms = retry.get('not_before_ms')
+        remaining = max(0, int(wake_ms / 1000 - now)) if wake_ms else None
+        deadline = time.strftime('%H:%M:%SZ', time.gmtime(wake_ms / 1000)) if wake_ms else 'unknown'
+        retry_detail = dict(retry, retry_in_s=remaining, deadline=deadline)
 
     # A watchdog HALT disables the durable coordinator, and the watchdog state
     # file is then overwritten wholesale on the next watching cycle -- so once
@@ -2458,6 +2432,10 @@ def apm_status():
         state = 'stopped'
         alert = ('coordinator disabled; draining current work' if lifecycle.get('tick_claim')
                  else 'coordinator stopped; automatic restart disabled')
+    elif retry_wait:
+        state = "waiting"
+        alert = ("library/store retry at %s (%s); no agent is scheduled during backoff"
+                 % (retry_detail['deadline'], retry.get('reason') or 'reason unavailable'))
     elif systematic:
         state = "stopped"
         alert = "QUEUE STOPPED: systematic frame failure (3x identical)"
@@ -2548,7 +2526,13 @@ def apm_status():
             alert = "cascade failed: served memory unknown (no seed count)"
 
     _apm_receipt_outcomes([d for _, d in frames])
-    recent = [_apm_frame_brief(n, d) for n, d in frames[-6:-1]][::-1]
+    resuming = set((lifecycle or {}).get('resumption_frames') or [])
+    recent = [_apm_frame_brief(n, d) for n, d in frames if n != num][-5:][::-1]
+    for row in recent:
+        if row['frame'] in resuming:
+            row['end'] = 'queued to resume; not terminal'
+        elif row['end'] == '?':
+            row['end'] = 'outcome not recorded'
     banked = [n for n, d in frames if _apm_banked(d)]
     # A parked frame does not stop the campaign -- the queue advances to the
     # next problem -- so `state` stays "ok" and the strip stayed silent while
@@ -2565,7 +2549,13 @@ def apm_status():
             "last_write_s": int(now - activity) if activity else None,
             "watchdog": wd_status, "valid_wait": wd_valid_wait,
             "jvm": _jvm_health(),
-            "phase_detail": _apm_phase_detail(fdir, phase),
+            "phase_detail": (dict(stage="awaiting-transport-retry",
+                                  error_code=retry.get('reason'), error_message=None,
+                                  retry_attempt=retry.get('attempt'),
+                                  retry_max=retry.get('max_attempts'),
+                                  retry_in_s=retry_detail.get('retry_in_s'))
+                             if retry_wait else _apm_phase_detail(fdir, phase)),
+            "retry_wait": retry_detail,
             "lifecycle": lifecycle,
             "timeline": _apm_frame_timeline(fdir, campaign, "f%d" % num, lifecycle),
             "substrate": _substrate_permits(),

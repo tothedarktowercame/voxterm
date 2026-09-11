@@ -768,8 +768,8 @@ function renderApm() {
               : age < 5400 ? Math.round(age / 60) + 'm ago'
               : Math.round(age / 3600) + 'h ago';
     const cls = age > 900 ? 'n' : 'warn';
-    bits.push('<span class="' + cls + '">coordinator halted ' + esc(when)
-              + 'Z (' + esc(ago) + '), rearmed</span>' + (rearms.length > 1
+    bits.push('<span class="' + cls + '">coordinator rearmed ' + esc(when)
+              + 'Z (' + esc(ago) + '); historical event</span>' + (rearms.length > 1
                 ? ' \u00d7' + rearms.length : ''));
   }
   if (d.parked_decisions_error) {
@@ -803,13 +803,14 @@ function renderApm() {
     if (pd && pd.stage) {
       const retrying = pd.retry_attempt != null && pd.retry_max != null;
       const stageLabel = pd.stage === 'awaiting-transport-retry'
-        ? 'waiting to retry store operation' : pd.stage;
+        ? (d.lifecycle && d.lifecycle.tick_claim && pd.retry_in_s <= 0
+            ? 'retrying store operation' : 'waiting to retry store operation') : pd.stage;
       bits.push('<span class="warn">' + esc(stageLabel) + '</span>'
                 + (retrying ? ' retry ' + esc(pd.retry_attempt) + '/' + esc(pd.retry_max) : '')
                 + (pd.retry_in_s != null && pd.retry_in_s > 0
                      ? ' in ' + apmAge(pd.retry_in_s) : ''));
     }
-    bits.push('<span class="ok">progress ' + apmAge(d.last_progress_s) + ' ago</span>');
+    bits.push('<span class="ok">coordinator progress ' + apmAge(d.last_progress_s) + ' ago</span>');
   }
   const running = (d.jobs || []).map(j =>
     '<span class="n">' + esc(j.agent) + '</span> ' + apmAge(j.for_s));
@@ -838,7 +839,9 @@ function renderApm() {
     }
     if (d.phase_detail && (d.phase_detail.error_code || d.phase_detail.error_message)) {
       const pd = d.phase_detail;
-      rows.push('phase: <span class="bad">' + esc(pd.error_code || '?') + '</span>'
+      const priorAttempt = pd.stage === 'awaiting-transport-retry';
+      rows.push((priorAttempt ? 'previous store attempt: <span class="warn">' : 'phase: <span class="bad">')
+                + esc(pd.error_code || '?') + '</span>'
                 + (pd.error_message ? ' — ' + esc(pd.error_message) : '')
                 + (pd.repair_kind ? ' · repair ' + esc(pd.repair_kind) + ' '
                                     + esc(pd.repair_attempts) + '/' + esc(pd.repair_max) : ''));
