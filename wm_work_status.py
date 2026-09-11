@@ -29,6 +29,20 @@ def read_work_status(path, age, fetch=fetch_job):
         result = {k: doc[k] for k in ('summary', 'next_step', 'updated_at')}
         result.update(state='recorded', source=path, issues=issues,
                       note_age_s=age(doc['updated_at']), kind='preparation-only')
+        # A coordinator readback explains failures lacking a task terminal.
+        # It is not an acceptance record and must match the displayed click.
+        observation = doc.get('execution_observation')
+        if observation is not None:
+            fields = ('click_id', 'status', 'error', 'observed_at', 'evidence')
+            if (not isinstance(observation, dict)
+                    or set(observation) != set(fields)
+                    or not all(isinstance(observation[k], str) and observation[k].strip()
+                               for k in fields)
+                    or not re.fullmatch(r'wm-click-[A-Za-z0-9-]+', observation['click_id'])
+                    or observation['status'] != 'incomplete'
+                    or age(observation['observed_at']) is None):
+                raise ValueError('invalid execution observation')
+            result['execution_observation'] = dict(observation, authority='coordinator-readback')
         job_id = doc.get('job_id')
         if job_id is not None:
             if not isinstance(job_id, str) or not re.fullmatch(r'invoke-[A-Za-z0-9-]+', job_id):

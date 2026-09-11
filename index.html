@@ -969,6 +969,9 @@ function renderWm() {
   if (!d) { wmEl.innerHTML = ''; return; }
   const q = d.queue || {}, qs = q.controller_state || q.state;
   const hasQueue = !!q.target && !['invalid', 'absent', 'unconfigured'].includes(q.state);
+  const candidateObservation = d.work?.execution_observation;
+  const observation = candidateObservation?.authority === 'coordinator-readback' &&
+    candidateObservation.click_id === q.in_flight?.['click-id'] ? candidateObservation : null;
   const historical = (d.trials || []).find(t => t.historical_execution);
   const h = historical && historical.historical_execution;
   const target = hasQueue ? q.target.entry_id : (h ? h.repair_id : d.run_id);
@@ -977,7 +980,8 @@ function renderWm() {
   const failed = ['failed', 'blocked'].includes(d.stage);
   let status = h ? 'verification completed · awaiting successor' :
     (hasQueue ? qs : (d.run_evidence ? d.stage : 'no execution evidence'));
-  if (invalid) status = 'evidence unavailable';
+  if (observation) status = 'run ended incomplete · ' + observation.error;
+  if (invalid && !observation) status = 'evidence unavailable';
   const age = hasQueue ? q.observation_age_s : d.activity_age_s;
   const fresh = hasQueue ? q.fresh : d.fresh;
   const parts = ['WM', esc(label), esc(status)];
@@ -986,9 +990,15 @@ function renderWm() {
   if (hasQueue && (q.active_actors || []).length)
     parts.push('active ' + q.active_actors.map(esc).join(', '));
   else if (!hasQueue && !h && fresh && d.worker) parts.push('worker ' + esc(d.worker));
-  const out = ['<div class="strip' + (invalid || failed ? ' alarm' : '') + '">' +
+  const out = ['<div class="strip' + (invalid || failed || observation ? ' alarm' : '') + '">' +
     (wmExpanded ? '▾ ' : '▸ ') + parts.join(' · ') + '</div>'];
   if (wmExpanded) {
+    if (observation) {
+      out.push('<div class="item">Coordinator readback · ' + esc(observation.observed_at) +
+        ' · no verified task terminal</div>');
+      out.push('<div class="item">Evidence: ' + esc(observation.evidence) + '</div>');
+      if (d.work.next_step) out.push('<div class="item">Next: ' + esc(d.work.next_step) + '</div>');
+    }
     if (invalid) out.push('<div class="item">' + esc(d.message || 'Queue observation unavailable') + '</div>');
     if (hasQueue) {
       const roles = q.assigned_roles || {}, flight = q.in_flight || {};
