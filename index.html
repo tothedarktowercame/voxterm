@@ -960,11 +960,25 @@ function refreshTopo() {
 refreshTopo();
 const wmEl = $('#wm');
 let wmData = null, wmExpanded = false;
+function renderWmQueue(q) {
+  if(!q || q.state==='unconfigured') return '<div class="strip">WM queue · continuous execution not configured</div>';
+  if(q.state==='invalid' || q.state==='absent') return '<div class="strip alarm">WM queue · '+esc(q.state==='invalid'?'observation invalid':'observation missing')+'</div>';
+  const target=q.target, roles=q.assigned_roles, flight=q.in_flight;
+  const parts=['WM queue '+esc(q.queue_id),esc(q.controller_state)];
+  if(!q.fresh) parts.push('observation stale '+apmAge(q.observation_age_s));
+  if(target) parts.push('entry '+esc(target.entry_id),'series '+esc(target.series_id));
+  if(roles) parts.push('assigned author '+esc(roles.author),'reviewer '+esc(roles.reviewer));
+  if(flight && flight['click-id']) parts.push('in-flight click '+esc(flight['click-id']));
+  if(q.hold_reason) parts.push(esc(q.hold_reason));
+  parts.push('active worker evidence unavailable');
+  return '<div class="strip'+(!q.fresh||q.controller_state==='held'?' alarm':'')+'">'+parts.join(' · ')+'</div>';
+}
 function renderWm() {
   const d = wmData;
   if (!d) { wmEl.innerHTML = ''; return; }
-  if (d.ok === false) { wmEl.innerHTML = '<div class="strip alarm">WM · <span class="bad">' + esc(d.message || 'run evidence unreadable') + '</span></div>'; return; }
-  if (!d.run_evidence) { wmEl.innerHTML = '<div class="strip">' + (wmExpanded?'▾':'▸') + ' WM · <span class="warn">no run evidence</span>' + (d.preparation_evidence?' · preparation recorded separately':'') + '</div>'; return; }
+  const queueHtml=renderWmQueue(d.queue);
+  if (d.ok === false) { wmEl.innerHTML = queueHtml+'<div class="strip alarm">WM · <span class="bad">' + esc(d.message || 'run evidence unreadable') + '</span></div>'; return; }
+  if (!d.run_evidence) { wmEl.innerHTML = queueHtml+'<div class="strip">' + (wmExpanded?'▾':'▸') + ' WM · <span class="warn">no run evidence</span>' + (d.preparation_evidence?' · preparation recorded separately':'') + '</div>'; return; }
   const alarm = !d.fresh || d.stage === 'blocked' || d.stage === 'failed';
   const historical = (d.trials||[]).filter(t=>t.historical_execution);
   const bits = ['WM <span class="n">'+esc(d.run_id)+'</span>', historical.length ? 'execution completed · awaiting successor validation' : esc(d.stage), '<span class="'+(d.fresh?'ok':'bad')+'">'+(d.fresh?'observed ':'observation stale ')+apmAge(d.activity_age_s)+'</span>', 'result '+esc(d.result)];
@@ -977,7 +991,7 @@ function renderWm() {
       out.push('<div class="item">'+esc(t.actual_action.type)+' · '+esc(h.repair_id)+' · completed; validation pending<br>Requested '+esc(t.trial_id)+' — not enacted<br>Assigned author '+esc(r.author)+' · reviewer '+esc(r.reviewer)+' · no active worker<br>Click '+esc(h.click_id)+' · run '+esc(h.run_id)+'</div>');
     } else out.push('<div class="item"><span class="n">'+esc(t.trial_id)+'</span> · '+esc(t.stage)+' · result '+esc(t.result)+(t.worker?' · worker '+esc(t.worker):'')+(t.reviewer?' · reviewer '+esc(t.reviewer):'')+' · <span class="'+(t.fresh?'ok':'bad')+'">'+(t.fresh?'observed ':'observation stale ')+apmAge(t.activity_age_s)+'</span>'+(t.blocked_reason?' · <span class="bad">'+esc(t.blocked_reason)+'</span>':'')+'</div>');
   });
-  wmEl.innerHTML=out.join('\n');
+  wmEl.innerHTML=queueHtml+out.join('\n');
 }
 wmEl.addEventListener('click',()=>{wmExpanded=!wmExpanded;renderWm();});
 function refreshWm(){return fetch('wm/status',{cache:'no-store'}).then(r=>r.ok?r.json():{ok:false,message:'HTTP '+r.status}).catch(e=>({ok:false,message:String(e)})).then(d=>{wmData=d;renderWm();});}

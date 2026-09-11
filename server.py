@@ -23,6 +23,7 @@ import wave
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 from urllib.request import Request, urlopen
+from wm_queue_status import read_queue_status
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 WHISPER = os.path.expanduser("~/tools/whisper/whisper-cli")
@@ -58,7 +59,7 @@ def _wm_age(iso):
     except (TypeError, ValueError, OverflowError):
         return None
 
-def wm_run_status():
+def _wm_run_status():
     """Fail-closed view of enacted evidence; never consults READY or Agency."""
     root, filename = WM_RUN_ROOT, WM_RUN_STATUS_FILE
     # Operator-owned source selection is reread so installing another series
@@ -68,10 +69,13 @@ def wm_run_status():
             with open(WM_SOURCE_CONFIG, encoding="utf-8") as h:
                 source = json.load(h)
             if (not isinstance(source, dict)
-                    or set(source) != {"schema", "root"}
+                    or not {"schema", "root"} <= set(source) <= {"schema", "root", "queue_status_file"}
                     or source["schema"] != "voxterm/wm-source-v1"
                     or not isinstance(source["root"], str)
-                    or not os.path.isabs(source["root"])):
+                    or not os.path.isabs(source["root"])
+                    or ("queue_status_file" in source and
+                        (not isinstance(source["queue_status_file"], str)
+                         or not os.path.isabs(source["queue_status_file"])))):
                 raise ValueError("invalid WM source selection")
             root, filename = source["root"], "run-visibility.json"
         except (OSError, ValueError) as exc:
@@ -148,6 +152,24 @@ def wm_run_status():
         return {"ok": False, "state": "invalid", "run_evidence": False, "message": "run evidence malformed", "preparation_evidence": prep, "source": path}
     stale = age > WM_STALE_S or any(not t["fresh"] for t in trials)
     return {"ok": True, "state": "stale" if stale else doc["stage"], "run_evidence": True, "run_id": doc["run_id"], "stage": doc["stage"], "worker": doc.get("worker"), "reviewer": doc.get("reviewer"), "result": doc.get("result", "pending"), "blocked_reason": doc.get("blocked_reason"), "updated_at": doc["updated_at"], "activity_age_s": age, "fresh": not stale, "trials": trials, "preparation_evidence": prep, "source": path}
+
+
+def wm_run_status():
+    result = _wm_run_status()
+    path = None
+    try:
+        if os.path.lexists(WM_SOURCE_CONFIG):
+            with open(WM_SOURCE_CONFIG, encoding="utf-8") as handle:
+                source = json.load(handle)
+            candidate = source.get("queue_status_file") if isinstance(source, dict) else None
+            if candidate is not None:
+                if not isinstance(candidate, str) or not os.path.isabs(candidate):
+                    raise ValueError("queue source must be an absolute path")
+                path = candidate
+        result["queue"] = read_queue_status(path, _wm_age, WM_STALE_S)
+    except (OSError, ValueError) as exc:
+        result["queue"] = {"state": "invalid", "configured": True, "error": str(exc)}
+    return result
 
 
 def env_list(name, default):

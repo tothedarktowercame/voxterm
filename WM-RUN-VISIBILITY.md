@@ -25,3 +25,11 @@ renders stale and never green. The RUN4 series service now writes the projection
 strict evidence readers. Historical admission is not a task-success verdict;
 its lifecycle metadata must distinguish the enacted repair from the requested
 but not enacted task. Observation age must not be interpreted as worker activity.
+
+The source-selection record may additionally name `queue_status_file`, an
+absolute path to a producer-owned `wm/run4-series-queue-visibility-v1` JSON
+observation. Queue state is separate from the last run result. Missing queue
+configuration means continuous execution is not configured; it never means the
+last run did not happen. Held/stopped/stale observations cannot appear running.
+Assigned roles and in-flight click identity do not prove current worker activity.
+The present queue schema supplies no active-worker evidence; the UI says so.
