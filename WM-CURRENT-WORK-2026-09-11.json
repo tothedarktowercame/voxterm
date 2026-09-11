@@ -1,21 +1,21 @@
 {
   "schema": "voxterm/wm-work-v1",
-  "updated_at": "2026-09-11T17:57:00.635369+00:00",
-  "summary": "Preparing the next run with Zai; no new WM trial is executing.",
-  "next_step": "Establish Zai-authored/reviewed verification that satisfies the real actor-binding checks, then validate and install the next one-entry packet.",
-  "job_id": "invoke-1789148820027-20225-df620e28",
+  "updated_at": "2026-09-11T18:02:03.177262+00:00",
+  "summary": "Zai staffing compatibility established; preparing real Zai verification and next packet. No WM trial is executing.",
+  "next_step": "Zai-2 executes qualification, obtains independent Zai-1 review, builds the fresh verifier and packet, and runs the isolated lifecycle before handing off one live installation.",
+  "job_id": "invoke-1789149689973-20226-1be24b2a",
   "issues": [
     {
       "title": "Next run: successor-v2 selection repair",
-      "status": "Source and packet tests passed; staffing transition pending",
+      "status": "Runtime/packet path reviewed; fresh Zai evidence being prepared",
       "detail": "The old fixed repair candidate targeted 057 while another stop-line was open. Applicability, replay and exact-click recovery fixes now pass. The current verifier records Codex-10/Codex-12; simply assigning Zai-2/Zai-1 does not select it.",
       "evidence": "5f3a06e3: paired 2/42, terminal 11/62, packet 1/30; f6a5dd89: 12 runtime + 8 packet hashes; 09bf1801: real actor check."
     },
     {
-      "title": "Zai preparation job",
-      "status": "Assigned to Zai-2; see live Agency status above",
-      "detail": "First shell reads were rejected by its read-only peripheral. Later file-list tool calls executed. No staffing artifact or validated Zai configuration has yet been received. Running does not mean useful progress or a WM worker dispatch.",
-      "evidence": "invoke-1789148820027-20225-df620e28; observed rejected reads and later list_files event."
+      "title": "Zai-owned qualification and packet",
+      "status": "Assigned to Zai-2, independent review assigned through Zai-1",
+      "detail": "Completed staffing check proves Zai actors are supported with fresh verification bytes. The synthetic job in that check is not production evidence. New work uses the real three-check qualification and actual independent Agency review; runtime code is fixed.",
+      "evidence": "Staffing note6b5e7992; preparation job invoke-1789149689973-20226-1be24b2a. Previous jobdf620e28 completed."
     },
     {
       "title": "Later initialization collision (38690)",
