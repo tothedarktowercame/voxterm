@@ -1,6 +1,11 @@
 # War Machine run visibility source
 
-Voxterm reads one producer-owned JSON file, configured by
+Voxterm reads one producer-owned JSON file. An operator-owned
+`~/.config/voxterm/wm-source.json` (override: `VOXTERM_WM_SOURCE_CONFIG`)
+selects the enacted source with
+`{"schema":"voxterm/wm-source-v1","root":"/absolute/visibility/root"}`.
+It is reread each poll; malformed selection refuses rather than falling back.
+Without that file the legacy source is configured by
 `VOXTERM_WM_RUN_ROOT` and `VOXTERM_WM_RUN_STATUS_FILE` (default
 `run-visibility.json`). It never writes this file and never treats readiness,
 preparation documents, or Agency presence as run evidence.
@@ -16,12 +21,7 @@ are RFC 3339 with a timezone. Stages are `planned`, `dispatched`, `working`,
 Missing evidence renders **no run evidence** and explicitly says trial detail
 is absent. Malformed evidence renders an alarm. Evidence older than
 `VOXTERM_WM_STALE_S` (900 seconds by default), including any stale trial,
-renders stale and never green. The future RUN4 runner must atomically write
-this projection from the joined sources identified by the runner audit:
-serving `GET /api/alpha/wm/click` status for current liveness,
-`futon2/data/wm-full-loop/<cohort>/attempt-NNN/` checkpoint events, and a
-verified `futon3c/data/wm-click-run-bindings/click-run-binding-<click-id>.edn`
-record. Terminal display additionally requires the durable closed checkpoint
-and matching binding. Phase-log age may establish last activity, but cannot
-establish continued execution. No producer currently joins those facts to
-RUN4 series and trial identities, so it remains an integration dependency.
+renders stale and never green. The RUN4 series service now writes the projection from durable controller and
+strict evidence readers. Historical admission is not a task-success verdict;
+its lifecycle metadata must distinguish the enacted repair from the requested
+but not enacted task. Observation age must not be interpreted as worker activity.

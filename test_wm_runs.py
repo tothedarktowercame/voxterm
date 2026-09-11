@@ -2,7 +2,8 @@ import json, os, shutil, tempfile, time
 import server
 fails=[]
 def ck(n,c): print(("PASS " if c else "FAIL ")+n); fails.append(n) if not c else None
-root=tempfile.mkdtemp(prefix="voxterm-wm-"); saved=(server.WM_RUN_ROOT,server.WM_STALE_S); server.WM_RUN_ROOT,server.WM_STALE_S=root,60
+root=tempfile.mkdtemp(prefix="voxterm-wm-"); saved=(server.WM_RUN_ROOT,server.WM_STALE_S,server.WM_SOURCE_CONFIG); server.WM_RUN_ROOT,server.WM_STALE_S=root,60
+server.WM_SOURCE_CONFIG=os.path.join(root,"source.json")
 try:
  d=server.wm_run_status(); ck("missing says no run evidence",d["ok"] and d["message"]=="no run evidence" and not d["run_evidence"])
  open(os.path.join(root,"PREPARATION.md"),"w").write("PREPARING")
@@ -20,6 +21,14 @@ try:
  future=time.strftime("%Y-%m-%dT%H:%M:%SZ",time.gmtime(time.time()+3600)); broken=dict(x); broken["updated_at"]=future; open(p,"w").write(json.dumps(broken)); ck("future run timestamp is invalid",not server.wm_run_status()["ok"])
  broken=dict(x); broken["trials"]=[dict(x["trials"][0])]; broken["trials"][0]["updated_at"]=future; open(p,"w").write(json.dumps(broken)); ck("future trial timestamp is invalid",not server.wm_run_status()["ok"])
  x["updated_at"]=x["trials"][0]["updated_at"]="2000-01-01T00:00:00Z"; open(p,"w").write(json.dumps(x)); d=server.wm_run_status(); ck("stale never green",d["state"]=="stale" and not d["fresh"])
+ selected=os.path.join(root,"enacted"); os.mkdir(selected)
+ with open(os.path.join(selected,"run-visibility.json"),"w") as h: json.dump(x,h)
+ with open(server.WM_SOURCE_CONFIG,"w") as h: json.dump({"schema":"voxterm/wm-source-v1","root":selected},h)
+ d=server.wm_run_status(); ck("explicit enacted source selected without refresh of evidence",d["run_evidence"] and d["source"].startswith(selected) and not d["fresh"])
+ with open(server.WM_SOURCE_CONFIG,"w") as h: h.write('{bad')
+ ck("bad source does not fall back to preparation",server.wm_run_status()["state"]=="invalid")
+ with open(server.WM_SOURCE_CONFIG,"w") as h: json.dump({"schema":"voxterm/wm-source-v1","root":root},h)
+ ck("source change read on next poll",server.wm_run_status()["source"]==p)
  del x["trials"][0]["result"]; open(p,"w").write(json.dumps(x)); ck("incomplete trial invalid",not server.wm_run_status()["ok"])
-finally: server.WM_RUN_ROOT,server.WM_STALE_S=saved; shutil.rmtree(root)
+finally: server.WM_RUN_ROOT,server.WM_STALE_S,server.WM_SOURCE_CONFIG=saved; shutil.rmtree(root)
 raise SystemExit(1 if fails else 0)

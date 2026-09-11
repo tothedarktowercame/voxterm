@@ -42,6 +42,8 @@ WM_RUN_ROOT = os.path.expanduser(os.environ.get(
     "~/code/futon2/holes/labs/wm-contract/runs/RUN4-preparation-2026-09-10"))
 WM_RUN_STATUS_FILE = os.environ.get("VOXTERM_WM_RUN_STATUS_FILE", "run-visibility.json")
 WM_STALE_S = int(os.environ.get("VOXTERM_WM_STALE_S", "900"))
+WM_SOURCE_CONFIG = os.path.expanduser(os.environ.get(
+    "VOXTERM_WM_SOURCE_CONFIG", "~/.config/voxterm/wm-source.json"))
 
 def _wm_age(iso):
     try:
@@ -58,8 +60,26 @@ def _wm_age(iso):
 
 def wm_run_status():
     """Fail-closed view of enacted evidence; never consults READY or Agency."""
-    path = os.path.join(WM_RUN_ROOT, WM_RUN_STATUS_FILE)
-    prep = any(os.path.isfile(os.path.join(WM_RUN_ROOT, n))
+    root, filename = WM_RUN_ROOT, WM_RUN_STATUS_FILE
+    # Operator-owned source selection is reread so installing another series
+    # need not restart the voice surface. Never select the newest file by age.
+    if os.path.lexists(WM_SOURCE_CONFIG):
+        try:
+            with open(WM_SOURCE_CONFIG, encoding="utf-8") as h:
+                source = json.load(h)
+            if (not isinstance(source, dict)
+                    or set(source) != {"schema", "root"}
+                    or source["schema"] != "voxterm/wm-source-v1"
+                    or not isinstance(source["root"], str)
+                    or not os.path.isabs(source["root"])):
+                raise ValueError("invalid WM source selection")
+            root, filename = source["root"], "run-visibility.json"
+        except (OSError, ValueError) as exc:
+            return {"ok": False, "state": "invalid", "run_evidence": False,
+                    "message": "WM evidence source misconfigured", "error": str(exc),
+                    "source": WM_SOURCE_CONFIG}
+    path = os.path.join(root, filename)
+    prep = any(os.path.isfile(os.path.join(root, n))
                for n in ("PREPARATION.md", "SERIES.edn"))
     if not os.path.isfile(path):
         return {"ok": True, "state": "absent", "run_evidence": False, "message": "no run evidence", "preparation_evidence": prep, "trial_detail": "absent", "source": path}
