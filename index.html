@@ -260,6 +260,22 @@
     <label><input type="checkbox" id="gatemic"> mute mic while speaking (speaker, not headphones)</label>
   </div>
 
+  <details id="processGuide">
+    <summary>Process phrases — voice and keyboard</summary>
+    <p>Begin an utterance with a phrase below. These are requests; the agent
+      must supply the task record or evidence. Say “literal” first to discuss
+      a phrase without translating it.</p>
+    <label><input type="checkbox" id="processEnabled" checked> translate process phrases</label>
+    <div id="processWords" class="bar"></div>
+    <form id="processForm">
+      <label for="processInput">Type a phrase and task, or choose a phrase above</label>
+      <textarea id="processInput" rows="3" placeholder="Clock in on task …"
+        style="display:block;box-sizing:border-box;width:100%;font:inherit;margin:8px 0;padding:10px;background:var(--panel);color:var(--fg);border:1px solid var(--line);border-radius:8px"></textarea>
+      <div class="bar"><button type="submit">Send to selected route</button></div>
+    </form>
+    <p id="processPreview" style="white-space:pre-wrap" aria-live="polite"></p>
+  </details>
+
   <div id="out"></div>
   <div class="bar">
     <button id="copy">Copy all</button>
@@ -271,6 +287,7 @@
   <div id="log"></div>
 </main>
 
+<script src="process_cues.js"></script>
 <script>
 const $ = s => document.querySelector(s);
 const talk = $('#talk'), tLabel = $('#talkLabel'), tHint = $('#talkHint');
@@ -1512,7 +1529,47 @@ setInterval(() => {
   }
 }, 1000);
 
+function processMessage(text) {
+  // If the vocabulary asset failed to load, ordinary dictation remains usable.
+  return globalThis.ProcessCues
+    ? ProcessCues.message(ProcessCues.translate(text, $('#processEnabled').checked)) : text;
+}
+
+function updateProcessPreview() {
+  $('#processPreview').textContent = processMessage($('#processInput').value);
+}
+if (globalThis.ProcessCues) {
+  for (const cue of ProcessCues.cues) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.textContent = cue.symbol + ' ' + cue.phrase;
+    button.title = cue.meaning;
+    button.addEventListener('click', () => {
+      const input = $('#processInput');
+      input.value = cue.phrase + ' ';
+      updateProcessPreview();
+      input.focus();
+    });
+    $('#processWords').appendChild(button);
+    const definition = document.createElement('p');
+    definition.textContent = cue.symbol + ' ' + cue.phrase + ': ' + cue.meaning;
+    $('#processGuide').appendChild(definition);
+  }
+} else {
+  $('#processPreview').textContent = 'Process vocabulary unavailable; phrases will remain literal.';
+  $('#processEnabled').checked = false;
+  $('#processEnabled').disabled = true;
+}
+$('#processInput').addEventListener('input', updateProcessPreview);
+$('#processEnabled').addEventListener('change', updateProcessPreview);
+$('#processForm').addEventListener('submit', event => {
+  event.preventDefault();
+  const text = $('#processInput').value.trim();
+  if (text) dispatch(text);
+});
+
 async function dispatch(text) {
+  text = processMessage(text);
   out.textContent += (out.textContent ? '\n' : '') + text;
   pending.classList.add('flash');
   setTimeout(() => pending.classList.remove('flash'), 450);
@@ -1638,10 +1695,10 @@ document.addEventListener('visibilitychange', () => {
 });
 talk.addEventListener('contextmenu', e => e.preventDefault());
 addEventListener('keydown', e => {
-  if (e.code === 'Space' && !e.repeat && mode === 'ptt' && e.target.tagName !== 'SELECT') { e.preventDefault(); startPtt(); }
+  if (e.code === 'Space' && !e.repeat && mode === 'ptt' && !e.target.closest('input, textarea, select, button, [contenteditable]')) { e.preventDefault(); startPtt(); }
 });
 addEventListener('keyup', e => {
-  if (e.code === 'Space' && mode === 'ptt' && e.target.tagName !== 'SELECT') { e.preventDefault(); stopPtt(); }
+  if (e.code === 'Space' && mode === 'ptt' && !e.target.closest('input, textarea, select, button, [contenteditable]')) { e.preventDefault(); stopPtt(); }
 });
 
 $('#copy').addEventListener('click', async () => {

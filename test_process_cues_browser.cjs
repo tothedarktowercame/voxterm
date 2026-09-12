@@ -1,0 +1,48 @@
+const {chromium} = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
+const fs = require('node:fs');
+const assert = require('node:assert/strict');
+(async () => {
+ const browser = await chromium.launch({headless:true, ...(process.env.CHROMIUM_PATH ? {executablePath:process.env.CHROMIUM_PATH} : {})});
+ const page = await browser.newPage({viewport:{width:390,height:844}});
+ const routed=[];
+ await page.route('**/*', async route => {
+  const p = new URL(route.request().url()).pathname;
+  if(p==='/') return route.fulfill({contentType:'text/html',body:fs.readFileSync(require('node:path').join(__dirname, 'index.html'),'utf8')});
+  if(p==='/process_cues.js') return route.fulfill({contentType:'text/javascript',body:fs.readFileSync(require('node:path').join(__dirname, 'process_cues.js'),'utf8')});
+  if(p==='/route') {routed.push(route.request().postDataJSON()); return route.fulfill({json:{ok:true,detail:'test sink'}});}
+  return route.fulfill({json:{ok:true,agents:[],choices:[],text:null}});
+ });
+ await page.goto('http://voxterm.test/');
+ await page.locator('#processGuide summary').click();
+ assert.equal(await page.locator('#processWords button').count(),5);
+ await page.getByRole('button',{name:'🕒 clock in',exact:true}).click();
+ await page.locator('#processInput').press('End');
+ await page.locator('#processInput').pressSequentially('on row 6');
+ await page.locator('#processInput').press('Space');
+ assert.equal(await page.evaluate(()=>pttRequested), false);
+ assert.match(await page.locator('#processPreview').innerText(),/🕒 CLOCK IN on row 6/);
+ assert.match(await page.locator('#processPreview').innerText(),/clock-in — request/);
+ await page.getByRole('button',{name:'Send to selected route'}).click();
+ await page.waitForFunction(()=>document.querySelector('#status').textContent.startsWith('sent'));
+ assert.equal(routed.length,1);
+ assert.match(routed[0].text,/existing mission clock/);
+ await page.evaluate(()=>handle({text:'Clock out on row 6.',model:'test'},0,false));
+ await page.waitForTimeout(100);
+ assert.match(routed[1].text,/🏁 CLOCK OUT/);
+ await page.evaluate(()=>{setPending('Clock in on row 7.'); handle({text:'Rocket.',model:'test'},0,true);});
+ await page.waitForTimeout(100);
+ assert.match(routed[2].text,/🕒 CLOCK IN on row 7/);
+ await page.locator('#processInput').fill('Literal clock in on row 8');
+ await page.getByRole('button',{name:'Send to selected route'}).click();
+ await page.waitForTimeout(100);
+ assert.equal(routed[3].text,'clock in on row 8');
+ await page.locator('#processEnabled').uncheck();
+ await page.locator('#processInput').fill('Clock in on row 9');
+ await page.getByRole('button',{name:'Send to selected route'}).click();
+ await page.waitForTimeout(100);
+ assert.equal(routed[4].text,'Clock in on row 9');
+ await page.locator('#processGuide').screenshot({path:'/tmp/voxterm-process-guide.png'});
+ fs.writeFileSync('/tmp/voxterm-process-browser-results.json',JSON.stringify({passed:true,routed},null,2));
+ console.log('Browser checks passed: guide, typing spaces, keyboard dispatch, PTT transcript, rocket dispatch, literal escape, disabled translation. Network sinks mocked.');
+ await browser.close();
+})().catch(e=>{console.error(e);process.exit(1)});

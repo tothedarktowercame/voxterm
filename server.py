@@ -2812,6 +2812,13 @@ class Handler(BaseHTTPRequestHandler):
                                extra={"Cache-Control": "no-cache"})
             except OSError as e:
                 self._send(500, str(e), "text/plain")
+        elif path == "/process_cues.js":
+            try:
+                with open(os.path.join(HERE, "process_cues.js"), "rb") as f:
+                    self._send(200, f.read(), "text/javascript; charset=utf-8",
+                               extra={"Cache-Control": "no-cache"})
+            except OSError as e:
+                self._send(500, str(e), "text/plain")
         elif path == "/say/next":
             with _say_lock:
                 now = time.time()

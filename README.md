@@ -258,3 +258,39 @@ without two consecutive letters is dropped.
 | `POST /say` | Emacs — enqueue text (sanitised server-side) |
 | `GET /say/next` | the page — poll, ~1.2 s |
 | `POST /speak` | the page — text in, WAV out (`X-Synth-Ms` header) |
+
+## Process phrases — voice and keyboard
+
+Open **Process phrases — voice and keyboard** to see the vocabulary, insert a
+phrase, or type and preview a message before sending it to the selected route.
+Voice uses the same translation at dispatch (on push-to-talk release, or after
+“rocket” in continuous mode). Begin the message with:
+
+| Say or type | Cue | Requested action |
+|---|---|---|
+| Clock in | 🕒 CLOCK IN | Establish task entry with a pattern, intended transition and witness |
+| Clock out | 🏁 CLOCK OUT | Record departure, actual outcome and unresolved work |
+| Pattern card | 🎒 PATTERN CARD | Identify the task's pattern/version and clause |
+| Record refusal | ⛔ RECORD REFUSAL | Capture the tension, evidence and reopening condition |
+| Review pattern | 🔎 REVIEW PATTERN | Review observed use and propose maintenance |
+
+For example, **“Clock in on row six. Rocket.”** sends a clock-in request in
+continuous mode. The rocket keyword retains its existing dispatch behavior.
+Capitalization is immaterial; “clock-in” also works. These phrases match only
+at the beginning of the dispatched message. **“We discussed clock in”** stays
+literal. Say **“literal clock in”** to produce the words without a cue, or
+untick **translate process phrases**. Clicking a phrase inserts it into the
+keyboard composer; it does not send it. Keyboard spaces do not start recording.
+
+`process_cues.js` is the shared vocabulary and meaning contract. Each translated
+message includes its readable cue and a short versioned explanation for the
+receiving agent; the full message is also visible in the transcript/keyboard
+preview. These are conversational requests, not registered institutional sigils
+or execution receipts. Agents must use the existing task clock/backpack where
+available, retain existing gates, and report evidence or a blocker. Missing task
+context is a clarification, not permission to invent a task. Clock-out does not
+mean success. No new automatic clock, credit, sanction or Agency call is enacted
+by the translator. Raw transcription logs remain available for comparison.
+
+Checks: `node test_process_cues.cjs` covers the vocabulary and contrasting literal
+cases. The extension does not change Whisper's decoder prompt or acoustic model.
