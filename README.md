@@ -263,8 +263,9 @@ without two consecutive letters is dropped.
 
 Open **Process phrases — voice and keyboard** to see the vocabulary, insert a
 phrase, or type and preview a message before sending it to the selected route.
-Voice uses the same translation at dispatch (on push-to-talk release, or after
-“rocket” in continuous mode). Begin the message with:
+Voice shows the cue as soon as a transcription returns, including in the
+continuous-mode pending buffer and Emacs preview before “rocket”. The full
+meaning is attached at dispatch. Begin the message with:
 
 | Say or type | Cue | Requested action |
 |---|---|---|
