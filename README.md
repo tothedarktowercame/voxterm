@@ -261,7 +261,8 @@ without two consecutive letters is dropped.
 
 ## Process phrases — voice and keyboard
 
-Open **Process phrases — voice and keyboard** to see the vocabulary, insert a
+An always-visible emoji-and-words reminder sits above **Hold to talk**.
+Open **Process phrases — voice and keyboard** to see the meanings, insert a
 phrase, or type and preview a message before sending it to the selected route.
 Voice shows the cue as soon as a transcription returns, including in the
 continuous-mode pending buffer and Emacs preview before “rocket”. The full
