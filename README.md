@@ -265,7 +265,7 @@ Open **Process phrases — voice and keyboard** to see the vocabulary, insert a
 phrase, or type and preview a message before sending it to the selected route.
 Voice shows the cue as soon as a transcription returns, including in the
 continuous-mode pending buffer and Emacs preview before “rocket”. The full
-meaning is attached at dispatch. Begin the message with:
+meaning is attached at dispatch. Say these phrases anywhere in the message:
 
 | Say or type | Cue | Requested action |
 |---|---|---|
@@ -273,13 +273,14 @@ meaning is attached at dispatch. Begin the message with:
 | Clock out | 🏁 CLOCK OUT | Record departure, actual outcome and unresolved work |
 | Pattern card | 🎒 PATTERN CARD | Identify the task's pattern/version and clause |
 | Record refusal | ⛔ RECORD REFUSAL | Capture the tension, evidence and reopening condition |
-| Review pattern | 🔎 REVIEW PATTERN | Review observed use and propose maintenance |
+| Review pattern / examine pattern | 🔎 REVIEW PATTERN | Review observed use and propose maintenance |
 
 For example, **“Clock in on row six. Rocket.”** sends a clock-in request in
 continuous mode. The rocket keyword retains its existing dispatch behavior.
-Capitalization is immaterial; “clock-in” also works. These phrases match only
-at the beginning of the dispatched message. **“We discussed clock in”** stays
-literal. Say **“literal clock in”** to produce the words without a cue, or
+Capitalization is immaterial; “clock-in” also works. Several cues can appear in one message, including repeated cues. Their meanings
+are attached once per cue kind. Quoted phrases and direct negations such as
+“do not clock in” remain literal. Say **“literal clock in”** to produce the words
+without a cue (a leading “literal” escapes the whole message), or
 untick **translate process phrases**. Clicking a phrase inserts it into the
 keyboard composer; it does not send it. Keyboard spaces do not start recording.
 

@@ -262,7 +262,7 @@
 
   <details id="processGuide">
     <summary>Process phrases — voice and keyboard</summary>
-    <p>Begin an utterance with a phrase below. These are requests; the agent
+    <p>Say a phrase anywhere in a message. Cues take their meaning from context; the agent
       must supply the task record or evidence. Say “literal” first to discuss
       a phrase without translating it.</p>
     <label><input type="checkbox" id="processEnabled" checked> translate process phrases</label>
@@ -1559,7 +1559,8 @@ if (globalThis.ProcessCues) {
     });
     $('#processWords').appendChild(button);
     const definition = document.createElement('p');
-    definition.textContent = cue.symbol + ' ' + cue.phrase + ': ' + cue.meaning;
+    definition.textContent = cue.symbol + ' ' + cue.phrase +
+      (cue.aliases ? ' (also: ' + cue.aliases.join(', ') + ')' : '') + ': ' + cue.meaning;
     $('#processGuide').appendChild(definition);
   }
 } else {
