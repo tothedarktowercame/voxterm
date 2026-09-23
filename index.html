@@ -1201,11 +1201,12 @@ function renderUsage() {
     }
     const left = lead.left;
     const cls = left < 15 ? 'crit' : (left < 35 ? 'warn' : 'n');
+    // The reset countdown carries the window: 30d can only be a month, and a
+    // weekly one never exceeds 7d (Joe, 2026-09-23). So no window marker here.
+    // They do converge inside the last week -- "2d" is "2d" either way -- and
+    // that is what the expanded row, which names the window, is for.
     const when = usageWhen(lead.resets);
-    // A non-weekly window is marked, because an unmarked 100% read as weekly
-    // when it is monthly is the same false reassurance in a slower disguise.
-    const win = lead.label === 'weekly' ? '' : '<span class="dim">/mo</span>';
-    out.push(`<span class="p">${label} <span class="${cls}">${left}%</span>${win}` +
+    out.push(`<span class="p">${label} <span class="${cls}">${left}%</span>` +
              (when ? ` <span class="dim">${when}</span>` : '') + '</span>');
   }
   let html = '<span class="strip">' + out.join('') + '</span>';
