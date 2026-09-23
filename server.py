@@ -204,6 +204,69 @@ def codex_models(limit=None):
     return slugs or ["gpt-5.6-sol"]
 
 
+CLAUDE_MODEL_CATALOG = os.path.expanduser(os.environ.get(
+    "VOXTERM_CLAUDE_MODEL_CATALOG", "~/.claude/cache/model-catalog"))
+# claude lives in ~/.local/bin, which is absent from PATH when this server is
+# launched by systemd outside a login shell (same reason futon3c's Makefile
+# pins an absolute CLAUDE_BIN).
+CLAUDE_BIN = os.environ.get(
+    "VOXTERM_CLAUDE_BIN", os.path.expanduser("~/.local/bin/claude"))
+_claude_cli_version = []          # memoised [tuple] or [None]; empty = not read
+
+
+def _claude_cli_version_tuple():
+    """Installed Claude Code version as an int tuple, or None if unreadable."""
+    if not _claude_cli_version:
+        try:
+            out = subprocess.run([CLAUDE_BIN, "--version"], capture_output=True,
+                                 text=True, timeout=10).stdout
+            m = re.search(r"(\d+)\.(\d+)\.(\d+)", out)
+            _claude_cli_version.append(tuple(int(g) for g in m.groups()) if m else None)
+        except Exception:                           # noqa: BLE001 - absence is the answer
+            _claude_cli_version.append(None)
+    return _claude_cli_version[0]
+
+
+def claude_models():
+    """Models the installed Claude Code CLI is currently offering.
+
+    Same reasoning as codex_models: the CLI maintains its own catalog cache
+    (with a staleAt it refreshes itself), so reading it keeps the buttons
+    current instead of a hardcoded list drifting. Joe asked on 2026-09-23
+    whether the picker fine-grains to the latest Opus; it did not, because the
+    list was a literal written when claude-opus-5 was newest and Opus 5.5 is a
+    SEPARATE id, not an alias that floats.
+
+    `section: "main"` is the CLI's own shortlist (what its /model picker shows
+    without "more"), and its order is the vendor's. `min_claude_code_version`
+    is honoured: offering a model this CLI cannot run would register a seat
+    that fails on its first turn. The literal is only for a box whose CLI has
+    never fetched a catalog.
+    """
+    try:
+        newest = max(glob.glob(os.path.join(CLAUDE_MODEL_CATALOG, "*.json")),
+                     key=os.path.getmtime)
+        with open(newest) as handle:
+            models = json.load(handle)["catalog"]["config"]["models"]
+        version = _claude_cli_version_tuple()
+
+        def runnable(entry):
+            need = entry.get("min_claude_code_version")
+            if not need or version is None:
+                return True                         # fail open: it is the CLI's own catalog
+            try:
+                return version >= tuple(int(part) for part in need.split("."))
+            except ValueError:
+                return True
+
+        ids = [m["id"] for m in models
+               if m.get("section") == "main" and str(m.get("id", "")).startswith("claude-")
+               and runnable(m)]
+    except Exception:                               # noqa: BLE001 - report nothing, fall back
+        ids = []
+    return ids or ["claude-opus-5", "claude-sonnet-5"]
+
+
 # Model signatures for chips whose registration declared none. Both runtimes'
 # session logs record the model for that specific seat.
 _SESSION_MODEL_CACHE = {}   # sid -> (path, mtime, model)
@@ -272,11 +335,12 @@ def codex_session_model(sid):
 
 AGENT_RUNTIMES = {
     "claude": {"label": "Claude", "model-prefix": "claude-",
+               "models-env": "VOXTERM_CLAUDE_MODELS", "discover": claude_models,
                "models": env_list("VOXTERM_CLAUDE_MODELS",
-                                  "claude-opus-5,claude-fable-5,"
-                                  "claude-sonnet-5,claude-haiku-4-5-20251001"),
+                                  ",".join(claude_models())),
                "attach": "claude-repl-attach-agent"},
     "codex": {"label": "Codex", "model-prefix": "gpt-",
+              "models-env": "VOXTERM_CODEX_MODELS", "discover": codex_models,
               "models": env_list("VOXTERM_CODEX_MODELS",
                                  ",".join(codex_models())),
               "attach": "codex-repl-attach-agent"},
@@ -293,11 +357,17 @@ AGENT_RUNTIMES = {
 }
 
 def runtime_choices():
-    """Refresh CLI model discovery when the picker opens, including new models."""
+    """Refresh CLI model discovery when the picker opens, including new models.
+
+    Discovery runs per open, not once at import: a long-lived server that was
+    started before a model shipped would otherwise offer yesterday's list for
+    as long as it stays up.
+    """
     choices = []
     for runtime, spec in AGENT_RUNTIMES.items():
-        models = (env_list("VOXTERM_CODEX_MODELS", ",".join(codex_models()))
-                  if runtime == "codex" else spec["models"])
+        discover = spec.get("discover")
+        models = (env_list(spec["models-env"], ",".join(discover()))
+                  if discover else spec["models"])
         choices.append({"type": runtime, "label": spec["label"],
                         "models": models, "model-prefix": spec["model-prefix"]})
     return choices
