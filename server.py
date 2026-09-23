@@ -283,6 +283,13 @@ AGENT_RUNTIMES = {
     "zai": {"label": "Z.AI", "model-prefix": "glm-",
             "models": env_list("VOXTERM_ZAI_MODELS", "glm-5.2"),
             "attach": "zai-repl-attach-agent"},
+    # Kimi model ids share no vendor prefix beyond "k" (k3, k3-256k,
+    # kimi-for-coding, kimi-for-coding-highspeed), so that is the guard.
+    "kimi": {"label": "Kimi", "model-prefix": "k",
+             "models": env_list("VOXTERM_KIMI_MODELS",
+                                "k3,k3-256k,kimi-for-coding,"
+                                "kimi-for-coding-highspeed"),
+             "attach": "kimi-repl-attach-agent"},
 }
 
 def runtime_choices():
@@ -966,7 +973,7 @@ def set_target(agent, mode="pin"):
         except Exception as e:
             return {"ok": False, "reason": "could not resolve agent: %s" % e}
         prefixes = {"claude": "claude-repl", "codex": "codex-repl",
-                    "zai": "zai-repl"}
+                    "zai": "zai-repl", "kimi": "kimi-repl"}
         prefix = prefixes.get(runtime)
         if not prefix:
             return {"ok": False,
@@ -1001,8 +1008,8 @@ def create_agent_target(runtime, model):
     spec = AGENT_RUNTIMES.get(runtime)
     if spec is None:
         return {"ok": False, "step": "validate",
-                "reason": "unsupported runtime %r; choose claude, codex, or zai"
-                          % runtime}
+                "reason": "unsupported runtime %r; choose one of %s"
+                          % (runtime, ", ".join(sorted(AGENT_RUNTIMES)))}
     if not isinstance(model, str) or not model.strip():
         return {"ok": False, "step": "validate",
                 "reason": "model must be a non-empty string"}
@@ -2599,6 +2606,15 @@ def apm_status():
 #   zai    — GET /api/monitor/usage/quota/limit on api.z.ai. Returns a `limits`
 #            list; `unit` is the window kind (3 = hour, 5 = month, 6 = week) and
 #            `percentage` is percent USED.
+#   kimi   — GET /coding/v1/usages on api.kimi.com, same bearer key the seats
+#            use. Two views of one quota: `limits[]` (limit/remaining/resetTime
+#            per window) and `usages.*` (used_ratio per named window). They can
+#            DISAGREE, so limits[] wins where it covers a window.
+#
+# AND THE LONG WINDOW IS NOT ALWAYS A WEEK. Claude, Codex and Zai bill weekly;
+# Kimi For Coding bills 5-hourly and MONTHLY. Each provider therefore also
+# reports lead_* — the longest window it actually has, and its name — so the
+# strip can say which window it is showing instead of calling a month a week.
 #
 # EVERY FIELD BELOW WAS READ OFF A LIVE RESPONSE ON 2026-09-06, not inferred
 # from docs. The shapes are stable enough to parse defensively but not stable
@@ -2722,6 +2738,90 @@ def _usage_zai():
     return out
 
 
+def _usage_kimi():
+    """Kimi For Coding quota. Bearer auth with the same key the seats use.
+
+    Two views of the same quota arrive in one response and they do not always
+    agree: `limits[]` is the windowed form (limit/remaining/resetTime) and
+    `usages.*` is a convenience ratio that has been seen reporting 0 for an
+    exhausted window (MoonshotAI/kimi-code#3951). Read limits[] first for any
+    window it covers; fall back to usages.* only for windows it omits.
+
+    Read off a live response 2026-09-23: one limits[] entry (300 TIME_UNIT_MINUTE
+    = the 5-hour pool) and usages.limit_5h / limit_month_total / limit_month_code.
+    A 7-day window exists on some plans and is preferred when present.
+    """
+    key = None
+    for p in ("~/.kimikey", "~/.kimi-key"):
+        try:
+            with open(os.path.expanduser(p)) as f:
+                key = f.read().strip()
+            break
+        except OSError:
+            continue
+    key = os.environ.get("KIMI_API_KEY") or key
+    if not key:
+        return {"error": "no KIMI_API_KEY / ~/.kimikey"}
+    auth = {"Authorization": "Bearer " + key}
+    base = os.environ.get("KIMI_BASE_URL", "https://api.kimi.com/coding/v1").rstrip("/")
+    with urlopen(Request(base + "/usages", headers=auth), timeout=15) as r:
+        d = json.load(r)
+
+    # Window naming is by DURATION, not by the vendor's label, so a renamed
+    # field cannot silently move a figure into the wrong row.
+    unit_min = {"TIME_UNIT_SECOND": 1 / 60.0, "TIME_UNIT_MINUTE": 1.0,
+                "TIME_UNIT_HOUR": 60.0, "TIME_UNIT_DAY": 1440.0}
+
+    def slot(minutes):
+        if minutes is None:
+            return None
+        if minutes <= 24 * 60:
+            return "session"
+        if minutes <= 8 * 1440:
+            return "weekly"
+        return "monthly"
+
+    out = {}
+    for lim in d.get("limits") or []:
+        w, detail = lim.get("window") or {}, lim.get("detail") or {}
+        per = unit_min.get(w.get("timeUnit"))
+        if per is None or w.get("duration") is None:
+            continue
+        try:
+            limit, remaining = float(detail["limit"]), float(detail["remaining"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if limit <= 0:
+            continue
+        name = slot(float(w["duration"]) * per)
+        if name:
+            out[name + "_used_pct"] = round((1.0 - remaining / limit) * 100.0, 1)
+            out[name + "_resets_at"] = detail.get("resetTime")
+
+    # usages.* fills only what limits[] did not cover. limit_month_total is the
+    # whole-plan figure; limit_month_code is the coding slice of it.
+    named = {"limit_5h": "session", "limit_7d": "weekly",
+             "limit_month_total": "monthly"}
+    for field, name in named.items():
+        entry = (d.get("usages") or {}).get(field)
+        if not isinstance(entry, dict) or name + "_used_pct" in out:
+            continue
+        ratio = entry.get("used_ratio")
+        if ratio is None:
+            continue
+        out[name + "_used_pct"] = round(float(ratio) * 100.0, 1)
+        out[name + "_resets_at"] = entry.get("reset_time")
+
+    if not any(k.endswith("_used_pct") for k in out):
+        return {"error": "no readable window in /usages"}
+    try:
+        with urlopen(Request(base + "/me", headers=auth), timeout=8) as r:
+            out["plan"] = (json.load(r) or {}).get("user_level_name")
+    except Exception:                               # noqa: BLE001 - plan is a garnish
+        pass
+    return out
+
+
 def _reset_epoch(v):
     """Normalise a reset time to epoch SECONDS.
 
@@ -2750,7 +2850,8 @@ def collect_usage():
         if _usage_cache["data"] and now - _usage_cache["at"] < USAGE_TTL_S:
             return _usage_cache["data"]
     providers = {}
-    for name, fn in (("claude", _usage_claude), ("codex", _usage_codex), ("zai", _usage_zai)):
+    for name, fn in (("claude", _usage_claude), ("codex", _usage_codex),
+                     ("zai", _usage_zai), ("kimi", _usage_kimi)):
         t0 = time.time()
         try:
             providers[name] = fn()
@@ -2759,11 +2860,22 @@ def collect_usage():
         providers[name]["took_ms"] = int((time.time() - t0) * 1000)
         # Derived once, here, so the browser never does percentage arithmetic:
         # "left" is what Joe asked to see and the only place it should be computed.
-        if "weekly_used_pct" in providers[name]:
-            providers[name]["weekly_left_pct"] = round(100.0 - providers[name]["weekly_used_pct"], 1)
-        for k in ("weekly_resets_at", "session_resets_at"):
-            if k in providers[name]:
-                providers[name][k] = _reset_epoch(providers[name][k])
+        p = providers[name]
+        if "weekly_used_pct" in p:
+            p["weekly_left_pct"] = round(100.0 - p["weekly_used_pct"], 1)
+        # The figure the strip leads with: the longest window this provider
+        # actually bills on, named so the panel never calls a month a week.
+        for window in ("weekly", "monthly"):
+            if window + "_used_pct" in p:
+                p["lead_label"] = window
+                p["lead_used_pct"] = p[window + "_used_pct"]
+                p["lead_left_pct"] = round(100.0 - p[window + "_used_pct"], 1)
+                p["lead_resets_at"] = p.get(window + "_resets_at")
+                break
+        for k in ("weekly_resets_at", "monthly_resets_at", "session_resets_at",
+                  "lead_resets_at"):
+            if k in p:
+                p[k] = _reset_epoch(p[k])
     data = {"ok": True, "fetched_at": time.time(), "providers": providers}
     with _usage_lock:
         _usage_cache.update(at=time.time(), data=data)
@@ -2896,6 +3008,8 @@ class Handler(BaseHTTPRequestHandler):
                             return found
                     if kind == "zai":
                         return "glm-5.3 (default)"
+                    if kind == "kimi":
+                        return "k3 (default)"
                     return None
 
                 def add(ident, kind, state, when, quiet=None):
