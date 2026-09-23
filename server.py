@@ -330,6 +330,49 @@ FIXUPS = [
 ]
 
 
+# Whisper punctuates dictation as if it were written prose, and gets the
+# sentence boundaries from the pauses rather than from the grammar. A single
+# spoken clause comes back as "Turn that I'm... Sending now." -- three
+# fragments, two invented full stops and a capital that belongs mid-sentence.
+# Joe dictates and types into the same buffers, so this only fires on the
+# dictation path, and the raw string is kept beside the softened one.
+SOFTEN_PUNCT = os.environ.get("VOXTERM_SOFTEN_PUNCT", "1") not in ("0", "", "no")
+
+# Capitalisation that must survive de-capitalisation: "I", and the vocabulary
+# the decoder prompt and the fixups already treat as proper nouns.
+_KEEP_CAPS = {"i", "i'm", "i'll", "i've", "i'd"}
+_KEEP_CAPS |= {w.lower().strip(".,") for w in DEFAULT_PROMPT.split() if w[:1].isupper()}
+_KEEP_CAPS |= {"claude", "codex", "opus", "zai", "emacs", "futon3c", "lean",
+               "kimi", "joe", "rob", "clojure", "elisp", "english", "chinese"}
+_ELLIPSIS = re.compile(r"\s*(?:\.\s*){2,}")
+_BREAK = re.compile(r"\s*\.\s+(?=[A-Za-z])")
+
+
+def soften_punctuation(text):
+    """Remove the sentence breaks whisper invents between spoken fragments.
+
+    An ellipsis is normalised to a full stop first, so a trailing-off pause and
+    an invented sentence break are the same case. Each break then becomes a
+    space, and the word after it is lowered unless it is capitalised anyway.
+    A final full stop survives: that one whisper gets right.
+    """
+    text = _ELLIPSIS.sub(". ", text)
+    out, i = [], 0
+    for m in _BREAK.finditer(text):
+        if m.end() >= len(text):
+            break
+        out.append(text[i:m.start()])
+        i = m.end()
+        word = re.match(r"[A-Za-z']+", text[i:])
+        if word and word.group(0).lower() not in _KEEP_CAPS and word.group(0)[0].isupper():
+            out.append(" " + word.group(0)[0].lower())
+            i += 1
+        else:
+            out.append(" ")
+    out.append(text[i:])
+    return re.sub(r"\s{2,}", " ", "".join(out)).strip()
+
+
 def apply_fixups(text):
     for pattern, replacement in FIXUPS:
         text = pattern.sub(replacement, text)
@@ -844,8 +887,12 @@ def transcribe(wav_bytes, model_key="small.en", audio_ctx=0, greedy=True):
         text, echoed = strip_prompt_echo(text)
         text, collapsed = collapse_repeats(text)
         text, stuttered = trim_stutter(text)
+        raw = text
+        if SOFTEN_PUNCT:
+            text = soften_punctuation(text)
         return {
             "text": text,
+            "text_raw": raw,
             "looped_segments": looped,
             "stutter_trimmed": stuttered or collapsed,
             "prompt_echo_stripped": echoed,

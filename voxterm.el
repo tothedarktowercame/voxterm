@@ -288,6 +288,25 @@ Returns the buffer name, or nil if the target is not writable."
       (buffer-name buf))))
 
 ;;;###autoload
+(defcustom voxterm-dictation-marker "🗣 "
+  "String prepended to the first dictated chunk of a turn, or nil for none.
+Joe dictates and types into the same REPL buffers, and nothing downstream
+could tell the two apart: the recorded turn looked identical either way.
+The marker makes the surface visible in the buffer and, because it is
+inserted before submission, it survives into the evidence record."
+  :type '(choice (const :tag "None" nil) string)
+  :group 'voxterm)
+
+(defun voxterm--input-empty-p ()
+  "Non-nil when the REPL's input region holds nothing but whitespace.
+Dictation arrives in chunks; the marker belongs on the first one only."
+  (and (boundp 'agent-chat--input-start)
+       (markerp agent-chat--input-start)
+       (marker-position agent-chat--input-start)
+       (string-blank-p (buffer-substring-no-properties
+                        (marker-position agent-chat--input-start)
+                        (point-max)))))
+
 (defun voxterm-insert (text &optional submit)
   "Insert TEXT at point in the active buffer, or append to the fallback buffer.
 With SUBMIT non-nil, then run RET's binding there — for `claude-repl-mode'
@@ -308,7 +327,10 @@ Returns a description of where the text went."
                     ;; at point — dictating prose into a file means dictating it
                     ;; where you are.
                     (when (voxterm--repl-prompt-p)
-                      (goto-char (point-max)))
+                      (goto-char (point-max))
+                      (when (and voxterm-dictation-marker
+                                 (voxterm--input-empty-p))
+                        (insert voxterm-dictation-marker)))
                     (when (and voxterm-space-before
                                (not (bolp))
                                (not (memq (char-before) '(?\s ?\t ?\( ?\[ ?\" ?'))))
