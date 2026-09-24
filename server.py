@@ -2904,8 +2904,16 @@ def _usage_kimi():
         per = unit_min.get(w.get("timeUnit"))
         if per is None or w.get("duration") is None:
             continue
+        # An exhausted window arrives as {"limit": "100", "used": "100"} with
+        # no "remaining" key (seen 2026-09-24 alongside a 5h 403). Requiring
+        # "remaining" skipped it and fell through to usages.limit_5h, which
+        # read 0 -- so the strip showed an empty window that was full.
         try:
-            limit, remaining = float(detail["limit"]), float(detail["remaining"])
+            limit = float(detail["limit"])
+            if "remaining" in detail:
+                remaining = float(detail["remaining"])
+            else:
+                remaining = limit - float(detail["used"])
         except (KeyError, TypeError, ValueError):
             continue
         if limit <= 0:
