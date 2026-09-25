@@ -307,6 +307,52 @@ Dictation arrives in chunks; the marker belongs on the first one only."
                         (marker-position agent-chat--input-start)
                         (point-max)))))
 
+;; Each dictated chunk is transcribed on its own, so whisper closes each one
+;; with a full stop and opens the next with a capital -- the pause for breath
+;; becomes a sentence break.  `soften_punctuation' in server.py only sees one
+;; chunk at a time, so the break at the join has to be removed here, where the
+;; chunks meet.  The final stop of the last chunk survives.
+
+(defcustom voxterm-join-chunks t
+  "When non-nil, a dictated chunk that continues the previous one joins it.
+The previous chunk's final full stop is removed and the new chunk's first
+word lowered, so a turn spoken with pauses reads as one run of words."
+  :type 'boolean :group 'voxterm)
+
+(defcustom voxterm-keep-caps
+  '("I" "I'm" "I'll" "I've" "I'd" "Claude" "Codex" "Opus" "Sonnet" "Haiku"
+    "Fable" "Zai" "GLM" "Kimi" "Emacs" "Lean" "Joe" "Rob" "Clojure" "Elisp"
+    "English" "Chinese")
+  "Words whose capital survives when a chunk is joined to the previous one."
+  :type '(repeat string) :group 'voxterm)
+
+(defvar voxterm--last-chunk-end nil
+  "Marker at the end of the last dictated chunk, while that turn is open.")
+
+(defun voxterm--continues-chunk-p ()
+  "Non-nil when point is where the last dictated chunk ended."
+  (and voxterm--last-chunk-end
+       (eq (marker-buffer voxterm--last-chunk-end) (current-buffer))
+       (= (point) voxterm--last-chunk-end)))
+
+(defun voxterm--lower-first-word (text)
+  "Lower TEXT's first letter unless its first word is in `voxterm-keep-caps'."
+  (if (and (string-match "\\`\\([[:alpha:]']+\\)" text)
+           (not (member (match-string 1 text) voxterm-keep-caps))
+           (let ((case-fold-search nil))
+             (string-match-p "\\`[[:upper:]][^[:upper:]]*\\'" (match-string 1 text))))
+      (concat (downcase (substring text 0 1)) (substring text 1))
+    text))
+
+(defun voxterm--join-chunk (text)
+  "Join TEXT to the dictated chunk that ends at point.
+Removes one full stop before point (not an ellipsis) and lowers TEXT's first
+word.  Returns TEXT, possibly lowered."
+  (if (and (eq (char-before) ?.)
+           (not (eq (char-before (1- (point))) ?.)))
+      (progn (delete-char -1) (voxterm--lower-first-word text))
+    text))
+
 (defun voxterm-insert (text &optional submit)
   "Insert TEXT at point in the active buffer, or append to the fallback buffer.
 With SUBMIT non-nil, then run RET's binding there — for `claude-repl-mode'
@@ -331,13 +377,18 @@ Returns a description of where the text went."
                       (when (and voxterm-dictation-marker
                                  (voxterm--input-empty-p))
                         (insert voxterm-dictation-marker)))
+                    (when (and voxterm-join-chunks (voxterm--continues-chunk-p))
+                      (setq text (voxterm--join-chunk text)))
                     (when (and voxterm-space-before
                                (not (bolp))
                                (not (memq (char-before) '(?\s ?\t ?\( ?\[ ?\" ?'))))
                       (insert " "))
                     (insert text)
+                    (setq voxterm--last-chunk-end (point-marker))
                     (run-hooks 'voxterm-after-insert-hook)
-                    (when submit (voxterm--submit-here)))))
+                    (when submit
+                      (setq voxterm--last-chunk-end nil)
+                      (voxterm--submit-here)))))
         (if sent
             (format "%s (%s)" (buffer-name buf) sent)
           (buffer-name buf))))))
