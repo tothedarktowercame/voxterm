@@ -74,6 +74,8 @@
   #pending.flash { border-color: var(--rocket); background: #241d10; }
   #retract { margin: 6px 0 0; padding: 8px 14px; font-size: 14px; }
   #pending:empty + #retract { display: none; }
+  #phantoms { margin-top: 8px; font-size: 12.5px; color: var(--dim); }
+  #phantoms button { margin: 2px 4px 2px 0; padding: 2px 8px; font-size: 12px; }
 
   .row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; margin-bottom: 12px; }
   label { font-size: 12.5px; color: var(--dim); display: flex; gap: 6px; align-items: center; }
@@ -224,7 +226,9 @@
       <div id="meter"></div><div id="thresh"></div><div id="meterLabel">idle</div>
     </div>
     <div id="pending"></div>
-    <button id="retract" title="Drop the buffered text without sending">✕ retract buffer</button>
+    <button id="retract" title="Drop the buffered text without sending; its short chunks are blocked from now on">✕ retract buffer</button>
+    <details id="phantoms"><summary>blocked phrases (<span id="phantomCount">0</span>)</summary>
+      <div id="phantomList"></div></details>
   </div>
 
   <aside id="processMnemonics" aria-label="Spoken process phrase reminders">
@@ -309,6 +313,7 @@ const meter = $('#meter'), meterWrap = $('#meterWrap'), threshEl = $('#thresh'),
 const pending = $('#pending'), statusEl = $('#status'), out = $('#out'), log = $('#log');
 const agents = $('#agents'), newKinds = $('#newKinds');
 let pendingRaw = ''; // Keep literal escapes and split phrases intact until dispatch.
+let pendingChunks = []; // the separate transcripts pendingRaw was joined from
 
 const RATE = 16000;
 const FRAME = 1024;                 // 64 ms at 16 kHz
@@ -359,6 +364,71 @@ function findTrigger(text) {
 }
 // whisper's stock hallucinations on near-silence — a fixed, well-known list, not a
 // guess about words. Everything else is judged structurally (see below).
+// Each chunk is transcribed on its own, so whisper ends every pause for breath
+// with a full stop and opens the next chunk with a capital: "tries to punctuate
+// my. Communication". server.py softens the breaks inside one chunk; the joins
+// between chunks are made here. One stop is removed (not an ellipsis, not ? or
+// !) and the next word lowered unless it is a name. Joe, 2026-09-25.
+const KEEP_CAPS = new Set(["I", "I'm", "I'll", "I've", "I'd", "Claude", "Codex",
+  "Opus", "Sonnet", "Haiku", "Fable", "Zai", "GLM", "Kimi", "Emacs", "Lean", "Joe",
+  "Rob", "Clojure", "Elisp", "English", "Chinese"]);
+function joinChunk(prev, next) {
+  prev = prev.trimEnd(); next = next.trimStart();
+  if (!prev || !next) return prev || next;
+  if (/(?:^|[^.])\.$/.test(prev)) {
+    prev = prev.slice(0, -1);
+    const w = next.match(/^[A-Za-z']+/);
+    if (w && !KEEP_CAPS.has(w[0]) && /^[A-Z][^A-Z]*$/.test(w[0]))
+      next = next[0].toLowerCase() + next.slice(1);
+  }
+  return prev + ' ' + next;
+}
+
+// Whisper hears phrases in silence. JUNK below catches the famous ones; this
+// list learns the rest from the retract button. A retracted chunk of at most
+// PHANTOM_MAX_WORDS words is remembered, and a later chunk that is the same
+// words (case and punctuation ignored) is dropped before it reaches the buffer.
+// Only whole chunks match, so words inside real dictation are never touched.
+// Kept per device in localStorage; tap an entry to forget it. Joe, 2026-09-25.
+const PHANTOM_KEY = 'voxterm.phantoms';
+const PHANTOM_MAX_WORDS = 6;
+function phantomKey(text) {
+  return text.toLowerCase().replace(/[^\p{L}\p{N}' ]+/gu, ' ').replace(/\s+/g, ' ').trim();
+}
+let phantoms = (() => {
+  try { return JSON.parse(localStorage.getItem(PHANTOM_KEY)) || []; } catch (e) { return []; }
+})();
+function savePhantoms() {
+  try { localStorage.setItem(PHANTOM_KEY, JSON.stringify(phantoms)); } catch (e) {}
+  renderPhantoms();
+}
+function isPhantom(text) {
+  const k = phantomKey(text);
+  return !!k && phantoms.includes(k);
+}
+function learnPhantoms(chunks) {
+  const learned = [];
+  for (const c of chunks) {
+    const k = phantomKey(c);
+    if (!k || k.split(' ').length > PHANTOM_MAX_WORDS || findTrigger(c)) continue;
+    if (!phantoms.includes(k) && !learned.includes(k)) learned.push(k);
+  }
+  if (learned.length) { phantoms = phantoms.concat(learned); savePhantoms(); }
+  return learned;
+}
+function renderPhantoms() {
+  const list = document.getElementById('phantomList');
+  if (!list) return;
+  document.getElementById('phantomCount').textContent = phantoms.length;
+  list.replaceChildren(...phantoms.map(k => {
+    const b = document.createElement('button');
+    b.textContent = '✕ ' + k;
+    b.title = 'Stop blocking this phrase';
+    b.addEventListener('click', () => { phantoms = phantoms.filter(x => x !== k); savePhantoms(); });
+    return b;
+  }));
+}
+
 const JUNK = /^(?:thank you\.?|thanks for watching!?|you(?:[\s.,!?]+you)*[.!?]?|bye\.?|\.|,)$/i;
 
 let ctx = null, node = null, inRate = RATE;
@@ -1469,8 +1539,8 @@ function handle(r, roundTrip, fromVad) {
                .join(' · ');
 
   if (!fromVad) {
-    if (!text || JUNK.test(text)) {
-      addEntry(text || '(silence)', meta + ' · dropped', '');
+    if (!text || JUNK.test(text) || isPhantom(text)) {
+      addEntry(text || '(silence)', meta + (isPhantom(text) ? ' · blocked phrase' : '') + ' · dropped', '');
       setStatus('nothing heard — not sent');
       return;
     }
@@ -1481,6 +1551,7 @@ function handle(r, roundTrip, fromVad) {
   }
 
   if (!text || JUNK.test(text.trim())) { dbg('drop junk ' + JSON.stringify(text || '')); addEntry(text || '(nothing)', meta + ' · dropped', ''); return; }
+  if (isPhantom(text)) { dbg('drop blocked ' + JSON.stringify(text)); addEntry(text, meta + ' · blocked phrase, dropped', ''); return; }
 
   // A one-word segment opening a paragraph is almost never dictation — it is a
   // noise burst rendered as a word ("Puck.", "Pelley.", "Watch."). Judged by
@@ -1492,7 +1563,7 @@ function handle(r, roundTrip, fromVad) {
     addEntry(text, meta + ' · one-word opener, dropped', ''); return;
   }
   if (!m) {
-    setPending(pendingRaw + (pendingRaw ? ' ' : '') + text);
+    setPending(joinChunk(pendingRaw, text), true, pendingChunks.concat([text]));
     addEntry(processTranslation(text).text, meta, '');
     setStatus('buffered — say "rocket" to send');
     return;
@@ -1504,7 +1575,7 @@ function handle(r, roundTrip, fromVad) {
   const before = text.slice(0, m.index).replace(TRAILING_TRIGGER, '').trim();
   let after = text.slice(m.index + m[0].length).trim();
   if (!/\w/.test(after)) after = '';   // bare punctuation after the keyword is not a next buffer
-  const payload = (pendingRaw + ' ' + before).trim();
+  const payload = joinChunk(pendingRaw, before);
   addEntry(processTranslation(text).text, meta + ' · <b>ROCKET</b>', 'fired');
   setPending(after, !payload);   // voxterm-insert clears the overlay; re-show any carry-over
   if (payload) dispatch(payload); else setStatus('rocket with empty buffer — nothing sent');
@@ -1530,8 +1601,9 @@ function preview(text) {
 
 // Every write to the pending buffer goes through here: it stamps the idle clock
 // and mirrors the buffer to Emacs (unless a dispatch is about to do that).
-function setPending(text, mirror = true) {
+function setPending(text, mirror = true, chunks = null) {
   pendingRaw = text;
+  pendingChunks = chunks || (text ? [text] : []);
   pending.textContent = processTranslation(text).text;
   pendingAt = performance.now();
   if (mirror) preview(text);
@@ -1758,7 +1830,13 @@ $('#copy').addEventListener('click', async () => {
   try { await navigator.clipboard.writeText(out.textContent); setStatus('copied'); }
   catch { setStatus('clipboard blocked — select and copy manually'); }
 });
-$('#retract').addEventListener('click', () => { const t = pendingRaw; setPending(''); addEntry(t, 'retracted by tap', ''); setStatus('buffer retracted — nothing sent'); });
+$('#retract').addEventListener('click', () => {
+  const t = pendingRaw, learned = learnPhantoms(pendingChunks);
+  setPending('');
+  addEntry(t, 'retracted by tap' + (learned.length ? ' · now blocking: ' + learned.join(' / ') : ''), '');
+  setStatus('buffer retracted — nothing sent' + (learned.length ? ', ' + learned.length + ' phrase(s) blocked' : ''));
+});
+renderPhantoms();
 $('#clear').addEventListener('click', () => { out.textContent = ''; setPending(''); log.innerHTML = ''; setStatus('cleared'); });
 
 // The ghost overlay in Emacs is cleared only by a newer preview, by an empty one, or

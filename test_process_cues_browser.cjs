@@ -56,7 +56,7 @@ const assert = require('node:assert/strict');
  assert.equal(await page.locator('#log .ent .t').first().innerText(), '🕒 CLOCK IN.');
  assert.equal(routed.length,5);
  await page.evaluate(()=>handle({text:'on row 10.',model:'test'},0,true));
- assert.match(await page.locator('#pending').innerText(), /^🕒 CLOCK IN\. on row 10/);
+ assert.match(await page.locator('#pending').innerText(), /^🕒 CLOCK IN on row 10/);
  await page.evaluate(()=>handle({text:'Rocket.',model:'test'},0,true));
  await page.waitForTimeout(100);
  assert.match(routed[5].text,/clock-in — request/);
