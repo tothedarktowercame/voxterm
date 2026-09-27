@@ -28,4 +28,20 @@
 (message "default: %S" said2)
 (unless (equal said2 '("The cap is fixed. Recording the ruling:")) (kill-emacs 1))
 (message "%S" said)
-(kill-emacs (if (equal said '("Fixed. This is the line Joe must hear." "last line, no newline")) 0 1))
+(unless (equal said '("Fixed. This is the line Joe must hear." "last line, no newline")) (kill-emacs 1))
+
+;; bad case (2026-09-27, P3 lost): narration with no trailing newline, a tool line,
+;; then a Gist chunk with no leading newline. Skipping the tool line must not glue
+;; "…kind:" onto "Gist:" and hide it from the line-anchored match.
+(defvar said3 nil)
+(cl-letf (((symbol-function 'voxterm--post-say) (lambda (text &rest _) (push text said3))))
+  (with-temp-buffer
+    (let ((voxterm-speak-stream t) (voxterm-speak-only-buffer nil) (voxterm-gist-only t))
+      (voxterm--stream-advice "Recording P3, with your additions:")
+      (voxterm--stream-advice "\n[Bash] cd /home/joe/code/futon3c && cat >> x\n")
+      (voxterm--stream-advice "Gist: P3 is recorded.\n\nFor the screen: details.")
+      (voxterm--stream-end-advice))))
+(message "glued: %S" said3)
+(unless (equal said3 '("P3 is recorded.")) (kill-emacs 1))
+(message "all gist-only cases ok")
+(kill-emacs 0)

@@ -551,7 +551,12 @@ shape.  Every line is \"[Name] preview\", per
     (unless voxterm--stream-start (setq voxterm--stream-start (current-time)))
     (cond
      (voxterm-gist-only
-      (unless (voxterm--tool-line-p text)
+      (if (voxterm--tool-line-p text)
+          ;; The tool line is not spoken, but it carried the line break
+          ;; between two prose blocks.  Keep one, or "...kind:" and a
+          ;; following "Gist: ..." glue together and the line-anchored
+          ;; match never sees the Gist (P3's Gist was lost this way).
+          (setq voxterm--stream-acc (concat voxterm--stream-acc "\n"))
         (setq voxterm--stream-acc (concat voxterm--stream-acc text))
         (voxterm--send-gist voxterm--stream-acc)))
      ((voxterm--tool-line-p text)
