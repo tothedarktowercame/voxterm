@@ -1858,7 +1858,11 @@ addEventListener('pagehide', () => {
   meter.style.width = pct.toFixed(1) + '%';
   threshEl.style.left = Math.min(100, (threshold / 0.08) * 100).toFixed(1) + '%';
   if (mode === 'always' && !calibrating && !meterLabel.textContent.startsWith('transcribing')) {
-    meterLabel.textContent = vad === 'speech' ? 'speech' : 'listening';
+    // While the phone reads out, say so: a bar reading "listening" then looks
+    // like the mic is live when the gate has muted it (Joe, 2026-09-27).
+    meterLabel.textContent = speaking
+      ? ($('#gatemic').checked ? 'muted — phone speaking' : 'phone speaking (mic open)')
+      : (vad === 'speech' ? 'speech' : 'listening');
   }
   requestAnimationFrame(paint);
 })();
