@@ -7,6 +7,7 @@
 
 (require 'cl-lib)
 (require 'seq)
+(require 'url)   ; url-request-* must be special when voxterm--post-say binds them
 
 (defgroup voxterm nil
   "Dictated text arriving from the voxterm whisper server."
@@ -409,6 +410,18 @@ Returns a description of where the text went."
 Off by default so a session you are not listening to stays silent.
 Toggle with \\[voxterm-toggle-speaking].")
 
+(defcustom voxterm-speak-only-buffer nil
+  "When a string, speak streamed replies only in the buffer of that name.
+nil speaks every agent buffer that streams, which in a busy daemon means
+every seat's replies at once.  Set it to one conversation, e.g.
+\"*claude-repl:claude-17*\", to talk with that agent alone."
+  :type '(choice (const :tag "Every buffer" nil) string) :group 'voxterm)
+
+(defun voxterm--speak-here-p ()
+  "Non-nil when the current buffer's replies should be spoken."
+  (or (null voxterm-speak-only-buffer)
+      (equal (buffer-name) voxterm-speak-only-buffer)))
+
 (defvar-local voxterm--stream-acc ""
   "Text streamed so far in the current turn, until a paragraph is sent.")
 (defvar-local voxterm--stream-sent nil
@@ -523,7 +536,8 @@ shape.  Every line is \"[Name] preview\", per
 
 (defun voxterm--stream-advice (text &rest _)
   "Accumulate streamed TEXT and speak once enough prose has arrived."
-  (when (and voxterm-speak-stream (stringp text) (not voxterm--stream-sent))
+  (when (and voxterm-speak-stream (voxterm--speak-here-p)
+             (stringp text) (not voxterm--stream-sent))
     (unless voxterm--stream-start (setq voxterm--stream-start (current-time)))
     (if (voxterm--tool-line-p text)
         ;; A tool line means the agent has stopped writing prose and started
@@ -535,7 +549,7 @@ shape.  Every line is \"[Name] preview\", per
 
 (defun voxterm--stream-end-advice (&rest _)
   "Flush whatever is left, then reset for the next turn."
-  (when voxterm-speak-stream (voxterm--flush t))
+  (when (and voxterm-speak-stream (voxterm--speak-here-p)) (voxterm--flush t))
   (setq voxterm--stream-acc "" voxterm--stream-sent nil
         voxterm--stream-start nil))
 
