@@ -145,7 +145,18 @@ Order of preference:
 4. the first visible frame.
 
 A killed pinned buffer clears the pin and resumes this focus order."
-  (or (voxterm--pinned-window) (voxterm--focus-window)))
+  (or (voxterm--pinned-window) (voxterm--speaking-window) (voxterm--focus-window)))
+
+(defun voxterm--speaking-window ()
+  "A window showing `voxterm-speak-only-buffer', when that is set.
+Talking with one agent means both directions go through its buffer: its
+replies are spoken, so dictation belongs there too.  Without this, a phone
+user who is not typing leaves the focus guess to whichever tty frame last
+reported focus (2026-09-27: dictation for claude-17 landed in claude-1's
+REPL, unsent)."
+  (when-let ((buf (and voxterm-speak-only-buffer
+                       (get-buffer voxterm-speak-only-buffer))))
+    (voxterm--live-buffer-window buf)))
 
 (defun voxterm--writable-p (buf)
   (and (buffer-live-p buf)
