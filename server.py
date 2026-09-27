@@ -643,7 +643,11 @@ LENGTH_SCALE = os.environ.get("VOXTERM_LENGTH_SCALE", "0.85")
 # verified finding will sometimes disagree; you should never have to work out
 # which one you just heard.
 INSTANT_SPEAKER = os.environ.get("VOXTERM_INSTANT_SPEAKER", "3")
-MAX_SPEAK_CHARS = 600
+# Longest text rendered in one piece. 600 (the original value) cut spoken
+# decisions off mid-sentence (2026-09-27, Joe): a Gist line is one paragraph and
+# can run past it. piper renders ~11x realtime, so 2000 chars (~2 min of speech)
+# costs ~10 s before playback starts.
+MAX_SPEAK_CHARS = int(os.environ.get("VOXTERM_MAX_SPEAK_CHARS", "2000"))
 
 
 def voice_path(name):
