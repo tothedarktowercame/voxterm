@@ -417,6 +417,16 @@ every seat's replies at once.  Set it to one conversation, e.g.
 \"*claude-repl:claude-17*\", to talk with that agent alone."
   :type '(choice (const :tag "Every buffer" nil) string) :group 'voxterm)
 
+(defcustom voxterm-gist-only nil
+  "When non-nil, speak only a turn's Gist line, wherever it appears.
+The default speaks the first paragraph (or the Gist if it comes first) as
+soon as it is ready, which is right for a turn-start signal.  An agent that
+works first and writes its Gist after its tool calls (2026-09-27: talking
+through decisions) had its narration spoken instead, and the Gist never.
+In gist-only mode narration and tool lines are never spoken; the first
+complete Gist line in the turn is, and a turn without one stays silent."
+  :type 'boolean :group 'voxterm)
+
 (defun voxterm--speak-here-p ()
   "Non-nil when the current buffer's replies should be spoken."
   (or (null voxterm-speak-only-buffer)
@@ -539,17 +549,38 @@ shape.  Every line is \"[Name] preview\", per
   (when (and voxterm-speak-stream (voxterm--speak-here-p)
              (stringp text) (not voxterm--stream-sent))
     (unless voxterm--stream-start (setq voxterm--stream-start (current-time)))
-    (if (voxterm--tool-line-p text)
+    (cond
+     (voxterm-gist-only
+      (unless (voxterm--tool-line-p text)
+        (setq voxterm--stream-acc (concat voxterm--stream-acc text))
+        (voxterm--send-gist voxterm--stream-acc)))
+     ((voxterm--tool-line-p text)
         ;; A tool line means the agent has stopped writing prose and started
         ;; working. Say what we have rather than waiting for a paragraph that
         ;; may never come.
-        (voxterm--flush t)
+      (voxterm--flush t))
+     (t
       (setq voxterm--stream-acc (concat voxterm--stream-acc text))
-      (voxterm--flush))))
+      (voxterm--flush)))))
+
+(defun voxterm--send-gist (acc)
+  "Speak the Gist line in ACC once it is complete; return non-nil if sent."
+  (let ((g (voxterm--gist acc)))
+    (when g
+      (setq voxterm--stream-sent t)
+      (voxterm--post-say
+       g (and voxterm--stream-start
+              (round (* 1000 (float-time (time-since voxterm--stream-start)))))
+       "gist"))))
 
 (defun voxterm--stream-end-advice (&rest _)
   "Flush whatever is left, then reset for the next turn."
-  (when (and voxterm-speak-stream (voxterm--speak-here-p)) (voxterm--flush t))
+  (when (and voxterm-speak-stream (voxterm--speak-here-p))
+    (if voxterm-gist-only
+        ;; A Gist that is the stream's very last line has no newline yet.
+        (unless voxterm--stream-sent
+          (voxterm--send-gist (concat voxterm--stream-acc "\n")))
+      (voxterm--flush t)))
   (setq voxterm--stream-acc "" voxterm--stream-sent nil
         voxterm--stream-start nil))
 
