@@ -137,15 +137,24 @@ claude-13 into claude-4.
 
 Order of preference:
 1. a live explicitly pinned buffer;
-2. the frame whose terminal reports focus (xterm focus tracking: switching
-   terminal windows updates this without a keystroke);
-3. `last-event-frame', where the last keystroke happened — the answer when no
-   terminal reports focus (emulator without focus events, or all defocused
-   because the desktop focus is on a browser);
-4. the first visible frame.
+2. the window the cursor is in (`voxterm--focus-window': the frame whose
+   terminal reports focus, else `last-event-frame', where the last keystroke
+   happened, else the first visible frame);
+3. only when that window's buffer cannot take text, the buffer voxterm is
+   speaking from (`voxterm--speaking-window').
+
+The cursor outranks the speaking buffer: with the speaking buffer first,
+moving the cursor into claude-19's REPL still sent dictation to claude-17,
+because speak-only was set to claude-17 (2026-09-28).  Joe: \"If my cursor is
+in a buffer, voxterm should know that.\"
 
 A killed pinned buffer clears the pin and resumes this focus order."
-  (or (voxterm--pinned-window) (voxterm--speaking-window) (voxterm--focus-window)))
+  (or (voxterm--pinned-window)
+      (let* ((win (voxterm--focus-window))
+             (buf (and (window-live-p win) (window-buffer win))))
+        (if (voxterm--writable-p buf)
+            win
+          (or (voxterm--speaking-window) win)))))
 
 (defun voxterm--speaking-window ()
   "A window showing `voxterm-speak-only-buffer', when that is set.
@@ -153,7 +162,8 @@ Talking with one agent means both directions go through its buffer: its
 replies are spoken, so dictation belongs there too.  Without this, a phone
 user who is not typing leaves the focus guess to whichever tty frame last
 reported focus (2026-09-27: dictation for claude-17 landed in claude-1's
-REPL, unsent)."
+REPL, unsent).  Since 2026-09-28 it is consulted only when the cursor's window
+cannot take text; see `voxterm--target-window'."
   (when-let ((buf (and voxterm-speak-only-buffer
                        (get-buffer voxterm-speak-only-buffer))))
     (voxterm--live-buffer-window buf)))
