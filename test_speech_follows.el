@@ -1,0 +1,40 @@
+;;; test_speech_follows.el --- the agent you dictate to is the agent you hear -*- lexical-binding: t -*-
+;; Run: emacs -Q --batch -l voxterm.el -l test_speech_follows.el
+;; bad case (2026-09-28): speak-only = claude-17, dictation into claude-19's
+;; REPL, claude-19's Gist never spoken.
+(require 'cl-lib)
+(defvar agent-chat--input-start nil)
+(make-variable-buffer-local 'agent-chat--input-start)
+(let ((a (get-buffer-create "*claude-repl:claude-17*"))
+      (b (get-buffer-create "*claude-repl:claude-19*"))
+      (plain (get-buffer-create "notes.txt"))
+      (fails 0) (said nil))
+  (dolist (buf (list a b))
+    (with-current-buffer buf (setq agent-chat--input-start (point-min-marker))))
+  (cl-flet ((check (label got want)
+              (unless (equal got want)
+                (setq fails (1+ fails))
+                (message "FAIL %s: got %S want %S" label got want))))
+    (cl-letf (((symbol-function 'voxterm--post-say) (lambda (text &rest _) (push text said))))
+      (delete-other-windows)
+      (set-window-buffer (selected-window) b)
+      (let ((voxterm-speak-only-buffer "*claude-repl:claude-17*")
+            (voxterm-pinned-buffer-name nil)
+            (voxterm-speak-stream t) (voxterm-gist-only t))
+        (voxterm-insert "hello claude-19")
+        (check "speech follows dictation into claude-19"
+               voxterm-speak-only-buffer "*claude-repl:claude-19*")
+        (with-current-buffer b
+          (voxterm--stream-advice "Gist: heard.\n\nbody")
+          (voxterm--stream-end-advice))
+        (check "claude-19's Gist is spoken" said '("heard."))
+        (set-window-buffer (selected-window) plain)
+        (voxterm-insert "a note")
+        (check "dictating into a non-REPL buffer does not move speech"
+               voxterm-speak-only-buffer "*claude-repl:claude-19*"))
+      (let ((voxterm-speak-only-buffer nil))
+        (set-window-buffer (selected-window) a)
+        (voxterm-insert "hi")
+        (check "nil (speak everything) is left alone" voxterm-speak-only-buffer nil)))
+    (message "speech-follows: %s" (if (zerop fails) "PASS" (format "%d FAIL" fails)))
+    (kill-emacs (if (zerop fails) 0 1))))

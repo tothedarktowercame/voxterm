@@ -156,6 +156,17 @@ A killed pinned buffer clears the pin and resumes this focus order."
             win
           (or (voxterm--speaking-window) win)))))
 
+;; The agent you dictate to is the agent you hear.  811f5e4 let the cursor
+;; outrank the speaking buffer for dictation, but speech stayed where it was:
+;; Joe talked to claude-19 while `voxterm-speak-only-buffer' still named
+;; claude-17, so every claude-19 Gist went unspoken (2026-09-28).
+(defun voxterm--follow-speech (name)
+  "Speak from agent REPL NAME, if speech is restricted to one buffer.
+nil (speak every buffer) is left alone: it already includes NAME."
+  (when (and (stringp voxterm-speak-only-buffer)
+             (not (equal voxterm-speak-only-buffer name)))
+    (setq voxterm-speak-only-buffer name)))
+
 (defun voxterm--speaking-window ()
   "A window showing `voxterm-speak-only-buffer', when that is set.
 Talking with one agent means both directions go through its buffer: its
@@ -395,6 +406,7 @@ Returns a description of where the text went."
                     ;; at point — dictating prose into a file means dictating it
                     ;; where you are.
                     (when (voxterm--repl-prompt-p)
+                      (voxterm--follow-speech (buffer-name))
                       (goto-char (point-max))
                       (when (and voxterm-dictation-marker
                                  (voxterm--input-empty-p))
