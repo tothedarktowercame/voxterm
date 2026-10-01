@@ -176,6 +176,7 @@
         touch-action: manipulation; }
   .ag:active { transform: scale(.97); }
   .ag:disabled { opacity: .6; cursor: wait; }
+  .ag.background { outline: 2px solid var(--ok); outline-offset: 1px; color: #cfe9d8; }
   .ag.invoking { border-color: var(--ok); background: #14231d; color: #cfe9d8; }
   /* Live job but silent > 10m: still green-border working, but the label says
      "quiet" and the border warms, because a long turn and a hung turn must not
@@ -641,6 +642,21 @@ function fmtQuiet(sec) {
   return h + 'h' + (m ? String(m).padStart(2, '0') + 'm' : '');
 }
 
+// Keep the two existing polls independent. A seat alone is not work; only
+// attributed child processes keep a chip visible between activity events.
+let agentSnapshot = {agents: [], target: null};
+let processSnapshot = null;
+function renderAgentSnapshots() {
+  const rows = new Map((agentSnapshot.agents || []).map(row => [row.id, {...row}]));
+  for (const seat of (processSnapshot?.agents || [])) {
+    if (seat.status !== 'seat' || !seat.tree?.children?.length) continue;
+    const row = rows.get(seat.id) || {id: seat.id};
+    if (row.status !== 'invoking') row.status = 'background';
+    rows.set(seat.id, row);
+  }
+  renderAgents([...rows.values()], agentSnapshot.target);
+}
+
 function renderAgents(rows, target) {
   agents.replaceChildren();
   const here = target && target.agent;
@@ -653,9 +669,11 @@ function renderAgents(rows, target) {
     // latches "invoking" forever). "quiet" means the job is live but its last
     // event is old -- the state worth attention, invisible before.
     const invoking = row.status === 'invoking';
+    const background = row.status === 'background';
     const quietSec = row['quiet-sec'];
     const quiet = invoking && quietSec != null && quietSec > 600;
     el.className = 'ag' + (invoking ? ' invoking' : '')
+                        + (background ? ' background' : '')
                         + (quiet ? ' quiet' : '')
                         + (isTarget ? ' target' : '')
                         + (isPinned ? ' pinned' : '');
@@ -718,9 +736,11 @@ function refreshAgents() {
       dbg('agents fetch failed: ' + err.message);
       return { __err: String(err.message).slice(0, 60) };
     })
-    .then(data => (data.__err
-                   ? renderAgents([{ id: 'agency: ' + data.__err, status: '' }])
-                   : renderAgents(data.agents || [], data.target)));
+    .then(data => {
+      agentSnapshot = data.__err
+        ? {agents: [{id: 'agency: ' + data.__err, status: ''}]} : data;
+      renderAgentSnapshots();
+    });
 }
 refreshAgents();
 setInterval(refreshAgents, 7000);
@@ -809,7 +829,11 @@ function refreshProcs() {
   return fetch('agency/procs', { cache: 'no-store' })
     .then(r => r.ok ? r.json() : { ok: false })
     .catch(() => ({ ok: false }))
-    .then(renderProcs);
+    .then(data => {
+      processSnapshot = data && data.ok !== false ? data : null;
+      renderAgentSnapshots();
+      renderProcs(data);
+    });
 }
 refreshProcs();
 setInterval(refreshProcs, 7000);
