@@ -1340,6 +1340,23 @@ def _seat_shaped(proc):
     return cmd == "claude seat" or cmd.startswith("codex exec")
 
 
+# Long-lived helpers the Agency JVM starts for itself. They belong to no seat,
+# so the matchers below rightly find no agent for them, and the panel used to
+# print them as "unattributed seat" (Joe, 2026-10-03, on the 43h-old resident
+# pattern search). Name them from their command line instead.
+JVM_SERVICES = [
+    ("notions_search.py --resident",
+     "pattern search", "resident embeddings server (futon3c pattern_search.clj)"),
+]
+
+
+def _jvm_service(args):
+    for needle, name, what in JVM_SERVICES:
+        if needle in args:
+            return {"name": name, "what": what}
+    return None
+
+
 def agency_procs():
     """{ok, jvm, agents:[{id, pid, start, tree:[...]}], unmatched:[...]}."""
     jvm = _agency_jvm_pid()
@@ -1359,7 +1376,8 @@ def agency_procs():
         args = parts[5] if len(parts) > 5 else ""
         procs[pid] = {"pid": pid, "ppid": ppid, "elapsed": et, "cpu": cpu,
                       "comm": comm, "cmd": _short_cmd(comm, args),
-                      "start": now - et, "session": _session_in(args)}
+                      "start": now - et, "session": _session_in(args),
+                      "service": _jvm_service(args)}
         kids.setdefault(ppid, []).append(pid)
 
     def cwd_of(pid):
@@ -1373,6 +1391,8 @@ def agency_procs():
         node["cwd"] = cwd_of(pid)
         node.pop("start", None)
         node.pop("session", None)
+        if not node.get("service"):
+            node.pop("service", None)
         node["children"] = []
         if depth < 5:
             for k in sorted(kids.get(pid, []), key=lambda k: -procs[k]["elapsed"]):
@@ -1592,6 +1612,11 @@ def agency_procs():
                      "elapsed": procs[pid]["elapsed"], "tree": subtree(pid, 0, [16])})
     for child in sorted(kids.get(jvm, []), key=lambda k: procs[k]["start"]):
         c = procs[child]
+        if c.get("service"):
+            # Never a seat: skip the matchers, whose start-time window could
+            # otherwise hand it to whichever agent was invoked near its start.
+            unmatched.append(subtree(child, 0, [14]))
+            continue
         ident, how = None, None
         sid = c.get("session")
         # `--resume <sid>` in argv IS the identity: the registry maps that uuid

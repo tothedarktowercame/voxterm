@@ -91,6 +91,17 @@ check("unknown session still degrades to unmatched (no fabrication)",
       len(r["unmatched"])==1 and r["unmatched"][0].get("likely-agent") is None,
       json.dumps(r["unmatched"])[:200])
 
+print("scenario D: JVM-started resident service is named, not treated as a seat")
+server._SESSION_OWNERS.clear()
+install(ps_for([(JVM,1,9999,"java","java -jar agency.jar"),
+                (200,JVM,157000,"python3","/x/.venv/bin/python3 -u /x/scripts/notions_search.py --resident --embeddings e.json")]),
+        make_agents())
+r=server.agency_procs()
+um=r["unmatched"]
+check("service row carries its name",
+      len(um)==1 and (um[0].get("service") or {}).get("name")=="pattern search", json.dumps(um)[:200])
+check("service is not attributed to an agent", r["agents"]==[], str(r["agents"]))
+
 print()
 print("RESULT:", "ALL PASS" if not fails else "FAILURES: %s"%fails)
 sys.exit(1 if fails else 0)

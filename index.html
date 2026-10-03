@@ -817,6 +817,13 @@ function renderProcs(data) {
     const sid = tree.session ? ' \u00b7 session ' + esc(String(tree.session).slice(0, 8)) : ' \u00b7 no session id';
     const kids = tree.children || [];
     const running = kids.length ? ' \u00b7 <span class="hot">running ' + esc(kids[0].cmd) + '</span>' : ' \u00b7 idle';
+    if (tree.service) {
+      // A helper the JVM started for itself (resident search etc.): no seat
+      // owns it, so name the service rather than calling it unattributed.
+      out.push('<span class="who">' + esc(tree.service.name) + '</span> (agency service: '
+               + esc(tree.service.what) + ') \u00b7 ' + esc(tree.cmd) + ' \u00b7 up ' + fmtElapsed(tree.elapsed));
+      continue;
+    }
     const who = tree['likely-agent']
       ? '<span class="who">' + esc(tree['likely-agent']) + '</span> (seat)'
       : '<span class="who">unattributed seat</span> (agency JVM child)';
