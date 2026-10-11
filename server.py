@@ -2801,11 +2801,32 @@ def _usage_claude():
     return out
 
 
+def _codex_bin():
+    """The codex CLI, found without relying on the service's PATH.
+
+    voxterm runs as a systemd user unit whose PATH is the bare system one,
+    while codex is an npm global under ~/.nvm. From the 2026-10-09 restart on,
+    every poll failed with FileNotFoundError and the strip showed "codex ?".
+    codex.js is `#!/usr/bin/env node`, so the directory holding it (which holds
+    node too) has to go on the child's PATH as well."""
+    import shutil
+    found = os.environ.get("VOXTERM_CODEX_BIN") or shutil.which("codex")
+    if not found:
+        cands = sorted(glob.glob(os.path.expanduser("~/.nvm/versions/node/*/bin/codex")))
+        found = cands[-1] if cands else None
+    return found
+
+
 def _usage_codex():
     # stdio JSON-RPC. Spawning a process per poll is why USAGE_TTL_S exists.
+    exe = _codex_bin()
+    if not exe:
+        return {"error": "codex CLI not found (set VOXTERM_CODEX_BIN)"}
+    env = dict(os.environ)
+    env["PATH"] = os.path.dirname(exe) + os.pathsep + env.get("PATH", "")
     proc = subprocess.Popen(
-        ["codex", "app-server"], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-        stderr=subprocess.DEVNULL, text=True, bufsize=1)
+        [exe, "app-server"], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL, text=True, bufsize=1, env=env)
     try:
         for i, m in ((1, "initialize"), (2, "account/rateLimits/read")):
             params = {"clientInfo": {"name": "voxterm-usage", "version": "1"}} if i == 1 else {}
