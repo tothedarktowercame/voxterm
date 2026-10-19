@@ -49,6 +49,10 @@ const assert = require('node:assert/strict');
  // default view is Turn; record for the newest turn (turn-DHzkds) loaded
  assert.equal(await page.locator('#turnSvg').isVisible(), true);
  assert.equal(await page.locator('#diagramSvg').evaluate(el => getComputedStyle(el).display), 'none');
+ // the Dispatch view's window and lane controls are all hidden in Turn view
+ for (const sel of ['button[data-hours="1"]', 'button[data-hours="3"]', 'button[data-hours="12"]',
+                    'label:has(#diagramHideSystem)'])
+   assert.equal(await page.locator('#diagramControls ' + sel).isVisible(), false, sel + ' hidden');
 
  // (a) one input wire per operator act of the turn
  const wires = await page.locator('#turnSvg .wire').count();
@@ -116,6 +120,17 @@ const assert = require('node:assert/strict');
  await page.waitForTimeout(300);
  assert.equal(await page.locator('#turnHead').innerText(), '4 acts — not read yet');
  assert.equal(await page.locator('#turnSvg .wire.loose').count(), opActs.length);
+
+ // an alignment naming a reply act the record lacks (live turn 59: r-0, the
+ // gist paragraph) draws a placeholder box, and the answered wire ends there
+ await page.route('**/xiang/turns/turn-DHzkds', route =>
+   route.fulfill({json:{ok:true,record:(() => {
+     const r = JSON.parse(JSON.stringify(record));
+     r.acts = r.acts.filter(a => a.id !== 'claude-3-turn-54-r-0'); return r; })()}}));
+ await page.evaluate(() => { loadTurnRecord('turn-DHzkds'); });
+ await page.waitForTimeout(300);
+ assert.equal(await page.locator('#turnSvg rect.box[data-id="claude-3-turn-54-r-0"][stroke-dasharray]').count(), 1);
+ assert.equal(await page.locator('#turnSvg .wire.loose[data-act="claude-3-turn-54-f-s1-1"]').count(), 0);
 
  // the turn in flight: acts are split out only after the reply, so the
  // header names the status instead of claiming no acts were recorded
