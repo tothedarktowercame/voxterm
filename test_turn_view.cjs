@@ -64,7 +64,7 @@ const assert = require('node:assert/strict');
    const d = await page.locator(`#turnSvg .wire[data-act="${al.act}"]`).first()
      .evaluate(el => el.getAttribute('d'));
    const boxY = await page.locator(`#turnSvg rect.box[data-id="${al.by}"]`).first()
-     .evaluate(el => parseFloat(el.getAttribute('y')) + 10);
+     .evaluate(el => parseFloat(el.getAttribute('y')) + parseFloat(el.getAttribute('height')) / 2);
    const endY = parseFloat(d.split(' ').pop().split(',')[1]);
    assert.ok(Math.abs(endY - boxY) < 1.5, `${al.act} ends at ${al.by}`);
  }
@@ -74,13 +74,26 @@ const assert = require('node:assert/strict');
  // r-3 is an ask-action: it gets a "to Joe" output wire
  assert.equal(await page.locator('#turnSvg text[fill="#6cf"]').count() >= 1, true);
 
- // (c) not-answered acts are loose ends at the right edge
+ // (c) not-answered acts drop to a rail below every act and every box
  const notAnswered = align.filter(x => !x.by).map(x => x.act);
+ const lowest = Math.max(...await page.locator('#turnSvg rect.box').evaluateAll(
+   els => els.map(el => parseFloat(el.getAttribute('y')) + parseFloat(el.getAttribute('height')))));
  for (const id of notAnswered) {
    const d = await page.locator(`#turnSvg .wire.loose[data-act="${id}"]`).first()
      .evaluate(el => el.getAttribute('d'));
-   assert.ok(d.includes('L350,'), id + ' runs to the right edge');
+   const endY = parseFloat(d.split(' ').pop().split(',')[1]);
+   assert.ok(endY > lowest, `${id} ends below the last box (${endY} > ${lowest})`);
  }
+ // the diagram reads top to bottom: acts in order down the page, each led
+ // by its 象 mark; reply paragraphs too, with the bracketed target dropped
+ const actYs = [];
+ for (const a of opActs)
+   actYs.push(await page.locator(`#turnSvg .wire[data-act="${a.id}"]`).first()
+     .evaluate(el => parseFloat(el.getAttribute('d').split(',')[1])));
+ assert.deepEqual([...actYs].sort((p, q) => p - q), actYs, 'acts run downward in order');
+ const texts = await page.locator('#turnSvg text').evaluateAll(els => els.map(el => el.textContent));
+ assert.ok(texts.some(t => t.startsWith('㊩ the stepper window')), 'report-problem act carries ㊩');
+ assert.ok(texts.some(t => t.startsWith('🈸 Shall I load')), 'ask-action reply carries 🈸, bracket dropped');
 
  // (d) header counts match the alignment
  const counts = {};

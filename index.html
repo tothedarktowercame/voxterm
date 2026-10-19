@@ -864,6 +864,15 @@ function stepTurn(delta) {
   if (next !== turnIndex) { turnIndex = next; loadTurnRecord(turnList[turnIndex].id); }
 }
 
+// 象's marks (futon3 turnfeed/core.cljs intent-mark; keep the two in step)
+const INTENT_MARK = {
+  gist: '㊥', propose: '㊭', approve: '㊣', disagree: '🈚', qualify: '㊟',
+  explain: '🈖', clarify: '🈯', report: '㊢', 'report-problem': '㊩',
+  verify: '㊬', retract: '🈹', withdraw: '🈡', unresolved: '🈳',
+  constrain: '🈲', 'ask-action': '🈸', delegate: '㊯', prioritize: '㊝',
+  collect: '㊮', extend: '🈕', continue: '🈰', defer: '🈝',
+  redirect: '🈘', explore: '㊫'
+};
 const VERDICT_STYLE = {
   answered:   { stroke: '#eee', width: 1.6, dash: null,     end: null },
   noted:      { stroke: '#9ab', width: 0.8, dash: null,     end: 'dot' },
@@ -907,53 +916,78 @@ function renderTurn() {
       ? opActs.length + ' acts: ' + Object.entries(counts).map(([k, n]) => n + ' ' + k).join(', ')
         + ' — read by ' + (align.seat || '馬')
       : opActs.length + ' acts — ' + unread;
-  // geometry: inputs on the left, boxes stacked right
-  const W = 360, inX = 118, boxX = 200, boxW = 104, rowH = 26, pad = 8;
-  const rows = Math.max(opActs.length, replyActs.length) + 1;
-  const H = pad * 2 + rows * rowH;
+  // geometry, read top to bottom: operator acts down the left, reply
+  // paragraphs down the right; each answered act wires down and across to
+  // its paragraph, and a loose end drops to the rail at the bottom.
+  const W = 360, actW = 150, boxX = 196, boxW = 138, rowH = 34, pad = 8;
+  const rows = Math.max(opActs.length, replyActs.length);
+  const looseN = opActs.filter(a => {
+    const al = alignBy[a.id] || {};
+    const v = align ? (al.verdict || 'not-answered') : 'not-answered';
+    return !(align && al.by && known.has(al.by) && v !== 'not-answered' && v !== 'unread');
+  }).length;
+  const railY = pad + rows * rowH + 10;
+  const H = railY + (looseN ? 16 : 0) + (commits.length ? 14 : 0) + pad;
   const yOf = i => pad + i * rowH + rowH / 2;
+  // two short lines of text, the 象 mark first
+  const twoLines = (x, y, t, fill, n, id) => {
+    const s = String(t || '').replace(/\s+/g, ' ').trim();
+    const cut = s.length > n ? (s.lastIndexOf(' ', n) > n / 2 ? s.lastIndexOf(' ', n) : n) : s.length;
+    const a = s.slice(0, cut), b = firstWords(s.slice(cut), n);
+    const d = id ? ` data-id="${escAttr(id)}"` : '';
+    return `<text x="${x}" y="${y - 2}" font-size="8.5" fill="${fill}"${d}>${escXml(a)}</text>`
+         + (b ? `<text x="${x}" y="${y + 8}" font-size="8.5" fill="${fill}"${d}>${escXml(b)}</text>` : '');
+  };
+  const markOf = k => INTENT_MARK[k] || (k ? k + ':' : '');
+  // a reply paragraph opens with its bracketed target; show the words after it
+  const body = t => String(t || '').replace(/^\s*\([^)]*\)\s*/, '');
   const boxY = {}; replyActs.forEach((b, i) => boxY[b.id] = yOf(i));
   const loose = [];
   let svg = '';
-  replyActs.forEach((b, i) => {
+  replyActs.forEach(b => {
     const y = boxY[b.id];
-    svg += `<rect class="box" data-id="${escAttr(b.id)}" x="${boxX}" y="${y - 10}" width="${boxW}" height="20" rx="6" fill="#123" stroke="#456"${b.missing ? ' stroke-dasharray="3 2"' : ''}/>`
-         + `<text x="${boxX + 4}" y="${y + 3}" font-size="8.5" fill="#cde" data-id="${escAttr(b.id)}">${escXml(firstWords((b.kind || '') + ' ' + (b.text || ''), 20))}</text>`;
+    svg += `<rect class="box" data-id="${escAttr(b.id)}" x="${boxX}" y="${y - 14}" width="${boxW}" height="28" rx="6" fill="#123" stroke="#456"${b.missing ? ' stroke-dasharray="3 2"' : ''}/>`
+         + twoLines(boxX + 4, y, markOf(b.kind) + ' ' + body(b.text), '#cde', 26, b.id);
     if (['ask-action', 'propose', 'clarify'].includes(b.kind))
-      svg += `<path d="M${boxX + boxW},${y} L${W - 30},${y}" stroke="#6cf" stroke-width="1.2" fill="none"/>`
-           + `<text x="${W - 28}" y="${y + 3}" font-size="8.5" fill="#6cf">Joe</text>`;
+      svg += `<path d="M${boxX + boxW},${y} L${W - 4},${y}" stroke="#6cf" stroke-width="1.2" fill="none"/>`
+           + `<text x="${boxX + boxW + 2}" y="${y - 3}" font-size="7.5" fill="#6cf">Joe</text>`;
   });
-  if (commits.length && replyActs.length) {
-    const y = boxY[replyActs[replyActs.length - 1].id];
-    commits.forEach((c, i) => {
-      svg += `<path class="commit" data-id="${escAttr(c.id)}" d="M${boxX + boxW},${y - 6} L${W - 40},${y - 6 - i * 8}" stroke="#3a6" stroke-width="1" fill="none" stroke-dasharray="1 2"/>`;
-    });
-    svg += `<text x="${W - 38}" y="${y - 8 - commits.length * 8}" font-size="8" fill="#3a6">${commits.length} commit</text>`;
-  }
+  let li = 0;
   opActs.forEach((a, i) => {
     const y = yOf(i);
-    // label above its wire, kept short enough to end before the wires bend
-    svg += `<text x="2" y="${y - 3}" font-size="8.5" fill="#9ab">${escXml(firstWords((a.kind || '') + ' ' + (a.text || ''), 24))}</text>`;
+    svg += twoLines(2, y, markOf(a.kind) + ' ' + (a.text || ''), '#9ab', 28);
     const al = alignBy[a.id] || { verdict: 'not-answered', method: null };
     const v = align ? (al.verdict || 'not-answered') : 'not-answered';
     const st = VERDICT_STYLE[v] || VERDICT_STYLE['not-answered'];
+    const dash = st.dash ? ` stroke-dasharray="${st.dash}"` : '';
     const target = al.by && boxY[al.by] !== undefined ? boxY[al.by] : null;
     if (align && target !== null && v !== 'not-answered' && v !== 'unread') {
-      const mid = (y + target) / 2;
-      svg += `<path class="wire" data-act="${escAttr(a.id)}" d="M2,${y + 2} L${inX},${y + 2} C${(inX + boxX) / 2},${y + 2} ${(inX + boxX) / 2},${target} ${boxX},${target}"`
-           + ` fill="none" stroke="${st.stroke}" stroke-width="${st.width}"${st.dash ? ` stroke-dasharray="${st.dash}"` : ''}/>`;
+      const mx = (actW + boxX) / 2;
+      svg += `<path class="wire" data-act="${escAttr(a.id)}" d="M${actW},${y} C${mx},${y} ${mx},${target} ${boxX},${target}"`
+           + ` fill="none" stroke="${st.stroke}" stroke-width="${st.width}"${dash}/>`;
       if (st.end === 'dot')
         svg += `<circle cx="${boxX}" cy="${target}" r="2.5" fill="${st.stroke}"/>`;
       if (al.method)
-        svg += `<text x="${(inX + boxX) / 2 - 4}" y="${mid - 2}" font-size="8" fill="#789">${al.method === 'quote' ? 'q' : 'm'}</text>`;
+        svg += `<text x="${mx - 3}" y="${(y + target) / 2 - 2}" font-size="8" fill="#789">${al.method === 'quote' ? 'q' : 'm'}</text>`;
     } else {
-      // unanswered / unread / no alignment yet: an open port at the right edge
-      svg += `<path class="wire loose" data-act="${escAttr(a.id)}" d="M2,${y + 2} L${W - 10},${y + 2}"`
-           + ` fill="none" stroke="${st.stroke}" stroke-width="${st.width}"${st.dash ? ` stroke-dasharray="${st.dash}"` : ''}/>`
-           + `<circle cx="${W - 10}" cy="${y + 2}" r="2" fill="${st.stroke}"/>`;
+      // unanswered / unread / no alignment yet: drop to the rail at the bottom
+      const x = actW + 6 + (li++ % 6) * 5;
+      svg += `<path class="wire loose" data-act="${escAttr(a.id)}" d="M${actW},${y} L${x},${y} L${x},${railY}"`
+           + ` fill="none" stroke="${st.stroke}" stroke-width="${st.width}"${dash}/>`
+           + `<circle cx="${x}" cy="${railY}" r="2" fill="${st.stroke}"/>`;
       loose.push(a.id);
     }
   });
+  if (loose.length)
+    svg += `<text x="2" y="${railY + 3}" font-size="8" fill="#888">${loose.length} not answered</text>`;
+  if (commits.length && replyActs.length) {
+    const last = boxY[replyActs[replyActs.length - 1].id] + 14;
+    const cy = H - pad - 3;
+    commits.forEach((c, i) => {
+      svg += `<path class="commit" data-id="${escAttr(c.id)}" d="M${boxX + 10 + i * 6},${last} L${boxX + 10 + i * 6},${cy - 8}" stroke="#3a6" stroke-width="1" fill="none" stroke-dasharray="1 2"/>`;
+    });
+    svg += `<text x="${boxX + 4}" y="${cy}" font-size="8" fill="#3a6">${commits.length} commit</text>`;
+  }
   turnSvg.setAttribute('viewBox', `0 0 ${W} ${H}`);
   turnSvg.innerHTML = svg;
   renderTurnDispatched(rec);
