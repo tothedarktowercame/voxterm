@@ -76,7 +76,7 @@ const cascade = {ok:true, id:'turn-DHzkds', turn_id:'claude-3-turn-54', analysis
 
  // (b) one box per node, sections top to bottom in reading order
  const kinds = await page.locator('#cascadeSvg .cnode').evaluateAll(els => els.map(e => e.dataset.kind));
- assert.deepEqual(kinds, ['noticed', 'cited', 'cited', 'rejected', 'proposed', 'parent', 'neighbour']);
+ assert.deepEqual(kinds, ['noticed', 'cited', 'cited', 'rejected', 'parent', 'proposed', 'neighbour']);
  const ys = await page.locator('#cascadeSvg .cnode rect').evaluateAll(els => els.map(e => +e.getAttribute('y')));
  assert.deepEqual([...ys].sort((p, q) => p - q), ys, 'boxes run downward');
  const texts = async id => page.locator(`#cascadeSvg .cnode[data-id="${id}"] text`).evaluateAll(els => els.map(e => e.textContent));
@@ -95,6 +95,7 @@ const cascade = {ok:true, id:'turn-DHzkds', turn_id:'claude-3-turn-54', analysis
  const nums = d.match(/-?[\d.]+/g).map(Number);
  assert.equal(nums[1], await centre('op/new'));
  assert.equal(nums[nums.length - 1], await centre('a/parent'));
+ assert.ok(await centre('a/parent') < await centre('op/new'), 'a parent is drawn above its child');
  assert.equal(await page.locator('#cascadeSvg path.cedge.library').count(), 1);
 
  // (d) tapping a box gives its reason

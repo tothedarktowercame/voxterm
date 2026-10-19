@@ -1095,14 +1095,15 @@ turnSvg.addEventListener('click', ev => {
 // --- Cascade view: the patterns one turn touched (GET xiang/cascade/ID,
 // read by server.py from the record's sidecar files). Top to bottom: what
 // the prompt retriever put in front of the seat, what 象 cited and rejected,
-// what it proposed, and the library around them. Arcs in the left gutter
+// the library parents, what it proposed under them, and the patterns one step
+// out. A parent is drawn above its child (Joe, 2026-10-19). Arcs in the left gutter
 // join a proposal to its parent and a judged pattern to its neighbours.
 const CASCADE_SECTIONS = [
   ['noticed',   'put in front of the seat'],
   ['cited',     'cited by 象'],
   ['rejected',  'considered, not cited'],
-  ['proposed',  'proposed as new'],
   ['parent',    'library: parents'],
+  ['proposed',  'proposed as new'],
   ['neighbour', 'library: one step out']
 ];
 const CASCADE_STYLE = {
