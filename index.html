@@ -36,6 +36,7 @@
   #diagramDetail { font-size: 12px; border: 1px solid var(--dim); border-radius: 8px; padding: 6px 8px; margin-top: 6px; color: var(--dim); }
   #turnHead { font-size: 12.5px; margin: 0 0 4px; }
   #turnDispatched { font-size: 12px; color: var(--dim); margin-top: 4px; }
+  #cascadeHead { font-size: 12.5px; margin: 0 0 4px; color: var(--dim); }
   .dispatch-only {}
   [data-lane] { cursor: pointer; }
   #framesNote { color: var(--dim); font-style: italic; font-size: 12.5px; padding: 8px 0; }
@@ -332,6 +333,7 @@
     <div id="diagramControls">
       <button type="button" id="diagViewTurnBtn" class="sel">Turn</button>
       <button type="button" id="diagViewDispatchBtn">Dispatch</button>
+      <button type="button" id="diagViewCascadeBtn">Cascade</button>
       <button type="button" id="turnPrevBtn" title="earlier turn">‹</button>
       <button type="button" id="turnNextBtn" title="later turn">›</button>
       <button type="button" data-hours="1">1 h</button>
@@ -344,6 +346,10 @@
          aria-label="one turn's string diagram"
          style="width:100%;height:auto;border:1px solid var(--dim);border-radius:8px;touch-action:manipulation;"></svg>
     <div id="turnDispatched"></div>
+    <div id="cascadeHead"></div>
+    <svg id="cascadeSvg" xmlns="http://www.w3.org/2000/svg" role="img"
+         aria-label="the patterns one turn touched"
+         style="width:100%;height:auto;border:1px solid var(--dim);border-radius:8px;touch-action:manipulation;"></svg>
     <svg id="diagramSvg" xmlns="http://www.w3.org/2000/svg" role="img"
          aria-label="cross-agent dispatch diagram"
          style="width:100%;height:auto;border:1px solid var(--dim);border-radius:8px;touch-action:manipulation;"></svg>
@@ -795,7 +801,10 @@ diagramHideSystem.addEventListener('change', renderDiagram);
 // intent tracking — which operator acts got answered, and how). ---------
 const turnSvg = $('#turnSvg'), turnHead = $('#turnHead'),
       turnDispatched = $('#turnDispatched');
-let diagramView = 'turn';            // 'turn' | 'dispatch'
+let diagramView = 'turn';            // 'turn' | 'dispatch' | 'cascade'
+const cascadeSvg = $('#cascadeSvg'), cascadeHead = $('#cascadeHead');
+let cascadeData = null, cascadeFocus = null;   // focus: a fragment key, 's1-0'
+const cascadeFetchLog = [];
 let turnList = null, turnAgent = null, turnIndex = 0, turnRecord = null, turnListAt = 0;
 const turnFetchLog = [];
 function setDiagramView(v) {
@@ -808,16 +817,21 @@ function setDiagramView(v) {
   $('#diagramHead').style.display = v === 'dispatch' ? '' : 'none';
   $('#diagramSvg').style.display = v === 'dispatch' ? '' : 'none';
   turnSvg.style.display = v === 'turn' ? '' : 'none';
-  turnHead.style.display = v === 'turn' ? '' : 'none';
+  turnHead.style.display = v === 'dispatch' ? 'none' : '';   // Cascade shows it too
   turnDispatched.style.display = v === 'turn' ? '' : 'none';
+  $('#diagViewCascadeBtn').classList.toggle('sel', v === 'cascade');
+  cascadeSvg.style.display = v === 'cascade' ? '' : 'none';
+  cascadeHead.style.display = v === 'cascade' ? '' : 'none';
   try { localStorage.setItem('voxterm-diagram-view', v); } catch (_) {}
-  if (v === 'dispatch') diagramEnsurePoll(); else turnEnsure();
+  if (v === 'dispatch') diagramEnsurePoll();
+  else { turnEnsure(); if (v === 'cascade') cascadeEnsure(); }
 }
 $('#diagViewTurnBtn').addEventListener('click', () => setDiagramView('turn'));
 $('#diagViewDispatchBtn').addEventListener('click', () => setDiagramView('dispatch'));
+$('#diagViewCascadeBtn').addEventListener('click', () => setDiagramView('cascade'));
 setDiagramView(diagramView);   // normalise both views' display for the default
 try { const v = localStorage.getItem('voxterm-diagram-view');
-      if (v === 'dispatch') setDiagramView('dispatch'); } catch (_) {}
+      if (v === 'dispatch' || v === 'cascade') setDiagramView(v); } catch (_) {}
 
 function turnEnsure() {
   if (viewDiagram.hidden) return;
@@ -853,7 +867,7 @@ function loadTurnRecord(id) {
   turnFetchLog.push(url);
   fetch(url, { cache: 'no-store' })
     .then(r => r.json())
-    .then(d => { turnRecord = d.record || null; renderTurn(); })
+    .then(d => { turnRecord = d.record || null; renderTurn(); cascadeEnsure(); })
     .catch(e => { turnHead.textContent = 'turn fetch failed: ' + e.message; });
 }
 $('#turnPrevBtn').addEventListener('click', () => stepTurn(1));   // list is newest-first
@@ -1014,6 +1028,9 @@ turnSvg.addEventListener('click', ev => {
   if (wire && turnRecord) {
     const id = wire.dataset.act;
     const a = (turnRecord.acts || []).find(x => x.id === id);
+    const rid = turnList && turnList[turnIndex] && turnList[turnIndex].id;
+    cascadePick = { record: rid, key: fragKeyOfAct(id) };
+    const lit = cascadeShownId === rid ? cascadeNodesFor(cascadePick.key) : [];
     const al = turnRecord.alignment &&
                turnRecord.alignment.acts.find(x => x.act === id);
     diagramDetail.hidden = false;
@@ -1023,7 +1040,10 @@ turnSvg.addEventListener('click', ev => {
       + (al ? '\n' + al.verdict + (al.by ? ' by ' + al.by : '')
             + (al.method ? ' · ' + al.method : '')
             + (al.quote ? '\n“' + String(al.quote).slice(0, 120) + '”' : '')
-        : '\nnot read yet');
+        : '\nnot read yet')
+      + (lit.length ? '\npatterns: ' + lit.map(n => n.kind + ' ' + n.id).join(', ')
+                    + ' — lit in Cascade'
+        : cascadeShownId === rid ? '\nno patterns for this act' : '\nCascade will light this act\'s patterns');
     return;
   }
   const box = ev.target.closest('rect.box, rect.box ~ text[data-id], text[data-id]');
@@ -1037,6 +1057,136 @@ turnSvg.addEventListener('click', ev => {
         + String(b.text || '').split('\n').slice(0, 4).join('\n');
     }
   }
+});
+
+// --- Cascade view: the patterns one turn touched (GET xiang/cascade/ID,
+// read by server.py from the record's sidecar files). Top to bottom: what
+// the prompt retriever put in front of the seat, what 象 cited and rejected,
+// what it proposed, and the library around them. Arcs in the left gutter
+// join a proposal to its parent and a judged pattern to its neighbours.
+const CASCADE_SECTIONS = [
+  ['noticed',   'put in front of the seat'],
+  ['cited',     'cited by 象'],
+  ['rejected',  'considered, not cited'],
+  ['proposed',  'proposed as new'],
+  ['parent',    'library: parents'],
+  ['neighbour', 'library: one step out']
+];
+const CASCADE_STYLE = {
+  noticed:   { fill: 'none', stroke: '#9ab', dash: null,  text: '#9ab' },
+  cited:     { fill: '#1d3a2a', stroke: '#6c9', dash: null, text: '#dfe' },
+  rejected:  { fill: '#222', stroke: '#666', dash: null,  text: '#999' },
+  proposed:  { fill: '#123', stroke: '#6cf', dash: '4 3', text: '#cde' },
+  parent:    { fill: 'none', stroke: '#567', dash: null,  text: '#9ab' },
+  neighbour: { fill: 'none', stroke: '#444', dash: '1 2', text: '#789' }
+};
+let cascadeShownId = null;
+function cascadeEnsure() {
+  if (diagramView !== 'cascade' || !turnRecord) return;
+  const id = turnList && turnList[turnIndex] && turnList[turnIndex].id;
+  if (!id) return;
+  const url = 'xiang/cascade/' + encodeURIComponent(id);
+  cascadeFetchLog.push(url);
+  fetch(url, { cache: 'no-store' })
+    .then(r => r.json())
+    .then(d => {
+      if (id !== (turnList[turnIndex] || {}).id) return;   // stepped on meanwhile
+      cascadeFocus = cascadeFocusFor(id);
+      cascadeShownId = id; cascadeData = d; renderCascade();
+    })
+    .catch(e => { cascadeHead.textContent = 'cascade unreachable: ' + e.message; });
+}
+// a fragment picked in the Turn view stays lit for that turn only
+let cascadePick = null;              // {record, key}
+function cascadeFocusFor(id) { return cascadePick && cascadePick.record === id ? cascadePick.key : null; }
+function fragKeyOfAct(actId) { const i = String(actId).lastIndexOf('-f-'); return i < 0 ? null : actId.slice(i + 3); }
+function cascadeNodesFor(key) {
+  return ((cascadeData && cascadeData.nodes) || []).filter(n => n.roles.some(r => r.frag === key));
+}
+function renderCascade() {
+  const d = cascadeData;
+  if (!d) return;
+  if (d.ok === false) { cascadeHead.textContent = 'no cascade: ' + (d.error || 'unknown'); cascadeSvg.innerHTML = ''; return; }
+  const frags = {}; (d.fragments || []).forEach(f => frags[f.key] = f);
+  const markOfFrag = k => k && frags[k] ? (INTENT_MARK[frags[k].intent] || '') : '';
+  const byKind = {}; (d.nodes || []).forEach(n => (byKind[n.kind] = byKind[n.kind] || []).push(n));
+  const n = k => (byKind[k] || []).length;
+  const focus = cascadeFocus && frags[cascadeFocus] ? cascadeFocus : null;
+  cascadeHead.textContent = d.analysis === 'absent' ? 'not read yet — no patterns judged'
+    : [n('cited') + ' cited', n('rejected') + ' considered', n('proposed') + ' proposed',
+       d.prompt_source === 'transcript' ? n('noticed') + ' in the prompt' : 'prompt picks ' + d.prompt_source]
+      .join(' · ')
+      + (d.unjudged_hits ? ' · ' + d.unjudged_hits + ' other hits not judged' : '')
+      + (focus ? '\nlit: ' + markOfFrag(focus) + ' ' + firstWords(frags[focus].text, 48) + ' (tap here to clear)' : '');
+  cascadeHead.style.whiteSpace = 'pre-line';
+  const W = 360, gx = 40, boxW = W - gx - 4, boxH = 28, gap = 6, headH = 14, pad = 6;
+  const pos = {};
+  let y = pad, svg = '';
+  for (const [kind, label] of CASCADE_SECTIONS) {
+    const rows = byKind[kind] || [];
+    if (!rows.length) continue;
+    svg += `<text x="${gx}" y="${y + 10}" font-size="8" fill="#789">${escXml(label)}</text>`;
+    y += headH;
+    for (const node of rows) {
+      const st = CASCADE_STYLE[kind];
+      const lit = focus ? node.roles.some(r => r.frag === focus) : true;
+      // a proposal hung on a whole sentence touches every fragment in it: past
+      // three, say so rather than print a row of marks
+      const ms = [...new Set(node.roles.map(r => markOfFrag(r.frag)).filter(Boolean))];
+      const marks = ms.length > 3 ? ms.slice(0, 2).join('') + '+' + (ms.length - 2) : ms.join('');
+      const badge = kind === 'proposed' ? (node.exists ? 'in library' : 'new')
+        : !node.exists ? 'not in library'
+        : node.first ? 'first cite'
+        : node.cites ? 'cited in ' + node.cites + ' turn' + (node.cites === 1 ? '' : 's') : 'never cited';
+      pos[node.id] = y + boxH / 2;
+      svg += `<g class="cnode" data-id="${escAttr(node.id)}" data-kind="${kind}" opacity="${lit ? 1 : 0.3}">`
+        + `<rect x="${gx}" y="${y}" width="${boxW}" height="${boxH}" rx="6" fill="${st.fill}" stroke="${st.stroke}"${st.dash ? ` stroke-dasharray="${st.dash}"` : ''}/>`
+        + `<text x="${gx + 4}" y="${y + 11}" font-size="8.5" fill="${st.text}">${escXml((marks ? marks + ' ' : '') + firstWords(node.id, 40))}</text>`
+        + `<text x="${gx + boxW - 4}" y="${y + 11}" font-size="7.5" fill="#789" text-anchor="end">${escXml(badge)}</text>`
+        + `<text x="${gx + 4}" y="${y + 22}" font-size="8" fill="${st.text}">${escXml(firstWords(node.title || '', 62))}</text>`
+        + `</g>`;
+      y += boxH + gap;
+    }
+  }
+  if (!Object.keys(pos).length)
+    svg += `<text x="${gx}" y="${y + 10}" font-size="8.5" fill="#888">no patterns recorded for this turn</text>`, y += 16;
+  // gutter arcs, nested by span so they do not cross much
+  const edges = (d.edges || []).filter(e => pos[e.from] !== undefined && pos[e.to] !== undefined)
+    .sort((p, q) => Math.abs(pos[p.from] - pos[p.to]) - Math.abs(pos[q.from] - pos[q.to]));
+  edges.forEach((e, i) => {
+    const y1 = pos[e.from], y2 = pos[e.to], x = gx - 6 - (i % 6) * 5;
+    const parent = e.kind === 'parent';
+    svg += `<path class="cedge ${e.kind}" data-from="${escAttr(e.from)}" data-to="${escAttr(e.to)}"`
+      + ` d="M${gx},${y1} C${x - 4},${y1} ${x - 4},${y2} ${gx},${y2}" fill="none"`
+      + ` stroke="${parent ? '#6cf' : '#567'}" stroke-width="${parent ? 1.2 : 0.8}"${parent ? '' : ' stroke-dasharray="2 2"'}/>`
+      + `<circle cx="${gx}" cy="${y2}" r="1.8" fill="${parent ? '#6cf' : '#567'}"/>`;
+  });
+  cascadeSvg.setAttribute('viewBox', `0 0 ${W} ${y + pad}`);
+  cascadeSvg.innerHTML = svg;
+}
+cascadeHead.addEventListener('click', () => {
+  if (!cascadeFocus) return;
+  cascadeFocus = null; cascadePick = null; renderCascade();
+});
+cascadeSvg.addEventListener('click', ev => {
+  const g = ev.target.closest('.cnode');
+  if (!g || !cascadeData) return;
+  const node = cascadeData.nodes.find(x => x.id === g.dataset.id);
+  if (!node) return;
+  const frags = {}; (cascadeData.fragments || []).forEach(f => frags[f.key] = f);
+  const lines = [node.id + (node.title ? ' — ' + node.title : '')];
+  for (const r of node.roles) {
+    const f = r.frag && frags[r.frag];
+    lines.push(r.role + (f ? ' for ' + (INTENT_MARK[f.intent] || '') + ' “' + firstWords(f.text, 60) + '”' : '')
+      + (r.score != null ? ' (score ' + r.score + ')' : ''));
+    if (r.why) lines.push('  ' + String(r.why).slice(0, 300));
+    if (r.query) lines.push('  query: ' + String(r.query).slice(0, 120));
+  }
+  if (node.parent) lines.push('parent: ' + node.parent);
+  if (node.kind !== 'proposed' && node.exists) lines.push('cited in ' + node.cites + ' turns' + (node.first ? ', first here' : ''));
+  diagramDetail.hidden = false;
+  diagramDetail.style.whiteSpace = 'pre-line';
+  diagramDetail.textContent = lines.join('\n');
 });
 
 const DIAGRAM_COLORS = { operator: '#6cf', bell: '#eee', system: '#999' };
