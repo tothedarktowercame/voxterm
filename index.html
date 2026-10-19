@@ -28,6 +28,13 @@
     border: 1px solid var(--dim); background: transparent; color: inherit;
   }
   #tabs .tab.active { background: rgba(127,127,127,.25); border-color: inherit; font-weight: bold; }
+  #diagramControls { display: flex; gap: 6px; align-items: center; margin: 0 0 6px; flex-wrap: wrap; }
+  #diagramControls button { padding: 4px 10px; border-radius: 8px; border: 1px solid var(--dim); background: transparent; color: inherit; }
+  #diagramControls button.sel { background: rgba(127,127,127,.25); font-weight: bold; }
+  #diagramControls label { font-size: 12.5px; color: var(--dim); }
+  #diagramHead { font-size: 12.5px; margin: 0 0 4px; }
+  #diagramDetail { font-size: 12px; border: 1px solid var(--dim); border-radius: 8px; padding: 6px 8px; margin-top: 6px; color: var(--dim); }
+  [data-lane] { cursor: pointer; }
   #framesNote { color: var(--dim); font-style: italic; font-size: 12.5px; padding: 8px 0; }
 
   /* --- mode switch --- */
@@ -220,6 +227,7 @@
   <nav id="tabs" aria-label="views">
     <button type="button" id="tabAgentsBtn" class="tab active">Agents</button>
     <button type="button" id="tabFramesBtn" class="tab">Frames</button>
+    <button type="button" id="tabDiagramBtn" class="tab">Diagram</button>
   </nav>
   <div id="viewAgents">
   <div id="agents"></div>
@@ -316,6 +324,19 @@
   <h2>Segments</h2>
   <div id="log"></div>
   </div><!-- /viewAgents -->
+  <div id="viewDiagram" hidden>
+    <div id="diagramHead"></div>
+    <div id="diagramControls">
+      <button type="button" data-hours="1">1 h</button>
+      <button type="button" data-hours="3" class="sel">3 h</button>
+      <button type="button" data-hours="12">12 h</button>
+      <label><input type="checkbox" id="diagramHideSystem" checked> hide system lanes</label>
+    </div>
+    <svg id="diagramSvg" xmlns="http://www.w3.org/2000/svg" role="img"
+         aria-label="cross-agent dispatch diagram"
+         style="width:100%;height:auto;border:1px solid var(--dim);border-radius:8px;touch-action:manipulation;"></svg>
+    <div id="diagramDetail" hidden></div>
+  </div>
   <div id="viewFrames" hidden>
     <div id="framesNote" hidden>No agent has the cursor — tap a chip in the Agents tab first.</div>
     <iframe id="framesFrame" title="active frames" hidden
@@ -671,22 +692,30 @@ let agentSnapshot = {agents: [], target: null};
 // agency/active poll's `target`). The iframe is created lazily on first
 // opening Frames, and is only ever re-pointed when the target CHANGES — the
 // stepper streams its own updates, so a reload would lose the reader's place.
-const tabAgentsBtn = $('#tabAgentsBtn'), tabFramesBtn = $('#tabFramesBtn');
-const viewAgents = $('#viewAgents'), viewFrames = $('#viewFrames');
+const tabAgentsBtn = $('#tabAgentsBtn'), tabFramesBtn = $('#tabFramesBtn'),
+      tabDiagramBtn = $('#tabDiagramBtn');
+const viewAgents = $('#viewAgents'), viewFrames = $('#viewFrames'),
+      viewDiagram = $('#viewDiagram');
 const framesNote = $('#framesNote'), framesFrame = $('#framesFrame');
 let framesLoaded = false;
 function framesSrcFor(agent) {
   return '/wip/stepper/?agent=' + encodeURIComponent(agent);
 }
 function showTab(which) {
-  const frames = which === 'frames';
-  viewAgents.hidden = frames;
+  const frames = which === 'frames', diagram = which === 'diagram';
+  viewAgents.hidden = frames || diagram;
   viewFrames.hidden = !frames;
-  tabAgentsBtn.classList.toggle('active', !frames);
+  viewDiagram.hidden = !diagram;
+  tabAgentsBtn.classList.toggle('active', !frames && !diagram);
   tabFramesBtn.classList.toggle('active', frames);
+  tabDiagramBtn.classList.toggle('active', diagram);
   if (frames) {
     framesLoaded = true;
     updateFramesView();
+  }
+  if (diagram) {
+    diagramLoaded = true;
+    diagramEnsurePoll();
   }
   try { localStorage.setItem('voxterm-tab', which); } catch (_) {}
 }
@@ -706,10 +735,116 @@ function updateFramesView() {
 }
 tabAgentsBtn.addEventListener('click', () => showTab('agents'));
 tabFramesBtn.addEventListener('click', () => showTab('frames'));
+tabDiagramBtn.addEventListener('click', () => showTab('diagram'));
+
+// ---------------------------------------------------------------------------
+// Diagram tab: the cross-agent dispatch window as one law-checked picture.
+// Data: GET diagram/dispatch?hours=H (server-side forward to the 象 diagram
+// route). Drawing: one lane per agent, time left→right; each bell a curve
+// from its ringer to its target, open bells dashed to the right edge; taps
+// show details / move the cursor through the page's existing target POST.
+const diagramSvg = $('#diagramSvg'), diagramHead = $('#diagramHead'),
+      diagramDetail = $('#diagramDetail'), diagramHideSystem = $('#diagramHideSystem');
+let diagramLoaded = false, diagramHours = 3, diagramTimer = null, diagramData = null;
+const diagramFetches = [];
+function diagramUrl() { return 'diagram/dispatch?hours=' + diagramHours; }
+function diagramFetch() {
+  diagramFetches.push(diagramUrl());
+  return fetch(diagramUrl(), { cache: 'no-store' })
+    .then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+    .then(d => { if (d.ok === false) throw new Error(d.error || 'diagram down');
+                 diagramData = d; renderDiagram(); })
+    .catch(err => {
+      diagramHead.textContent = 'diagram unreachable: ' + err.message;
+    });
+}
+function diagramEnsurePoll() {
+  if (diagramTimer || !diagramLoaded) return;
+  diagramFetch();
+  diagramTimer = setInterval(() => {
+    if (!viewDiagram.hidden) diagramFetch();
+  }, 15000);
+}
+$('#diagramControls').addEventListener('click', ev => {
+  const b = ev.target.closest('button[data-hours]');
+  if (!b) return;
+  diagramHours = b.dataset.hours;
+  for (const x of $('#diagramControls').querySelectorAll('button'))
+    x.classList.toggle('sel', x === b);
+  diagramFetch();
+});
+diagramHideSystem.addEventListener('change', renderDiagram);
+
+const DIAGRAM_COLORS = { operator: '#6cf', bell: '#eee', system: '#999' };
+function renderDiagram() {
+  const d = diagramData;
+  if (!d) return;
+  const hide = diagramHideSystem.checked;
+  const lanes = d.lanes.filter(l => !(hide && l.startsWith('system:')));
+  const laneY = {}; lanes.forEach((l, i) => laneY[l] = i);
+  const bells = d.bells.filter(b => laneY[b.from] !== undefined && laneY[b.to] !== undefined);
+  const t0 = Date.parse(d.window.from), t1 = Date.parse(d.window.to) || Date.now();
+  const W = 360, labelW = 86, pad = 6, rowH = 26, H = pad * 2 + lanes.length * rowH;
+  const X = at => Math.min(W - 4, labelW + pad + (Math.max(0, Date.parse(at) - t0))
+                               / Math.max(1, t1 - t0) * (W - labelW - 2 * pad));
+  const Y = l => pad + (laneY[l] === undefined ? lanes.length : laneY[l]) * rowH + rowH / 2;
+  const openSet = new Set(d.open);
+  const findingCount = Object.entries(d.findings || {})
+    .reduce((n, [, v]) => n + (Array.isArray(v) ? v.length : 0), 0);
+  diagramHead.textContent =
+    (d.lawful ? 'lawful' : findingCount + ' finding(s)')
+    + ' — ' + d.bells.length + ' bells, ' + d.open.length + ' open'
+    + (d.crossings.length ? ', crossings: ' + d.crossings.map(c => c.join('↔')).join(' ') : '');
+  let svg = '';
+  lanes.forEach((l, i) => {
+    const y = pad + i * rowH + rowH / 2;
+    svg += `<line x1="${labelW}" y1="${y}" x2="${W - pad}" y2="${y}" stroke="#456" stroke-width="1"/>`
+         + `<text x="2" y="${y + 4}" font-size="11" fill="#9ab" data-lane="${escAttr(l)}">${escXml(short(l))}</text>`;
+  });
+  for (const b of bells) {
+    const y1 = Y(b.from), y2 = Y(b.to);
+    const x1 = X(b.rung_at), x2 = b.delivered_at ? X(b.delivered_at) : x1;
+    const open = openSet.has(b.id);
+    const xe = open ? W - pad : x2;
+    const col = DIAGRAM_COLORS[b.kind] || '#eee';
+    const mid = (y1 + y2) / 2 + (y1 === y2 ? -10 : 0);
+    svg += `<path class="bell" data-id="${escAttr(b.id)}" d="M${x1},${y1} C${x1},${mid} ${xe},${mid} ${xe},${y2}"`
+         + ` fill="none" stroke="${col}" stroke-width="1.5"${open ? ' stroke-dasharray="4 3"' : ''}/>`;
+    if (b.replied_at)
+      svg += `<circle class="bell" data-id="${escAttr(b.id)}" cx="${X(b.replied_at)}" cy="${y2}" r="3.5"`
+           + ` fill="${b.state === 'failed' ? '#f55' : col}"/>`;
+  }
+  svg += `<rect x="0" y="0" width="1" height="1" fill="none"/>`; // keep svg root sane
+  diagramSvg.setAttribute('viewBox', `0 0 ${W} ${H}`);
+  diagramSvg.innerHTML = svg;
+}
+function short(l) { return l.length > 14 ? l.slice(0, 13) + '…' : l; }
+function escXml(s) {
+  return String(s).replace(/[<>&"']/g, c => ({'<':'&lt;','>':'&gt;','&':'&amp;','"':'&quot;',"'":'&#39;'}[c]));
+}
+function escAttr(s) { return escXml(s); }
+diagramSvg.addEventListener('click', ev => {
+  const laneEl = ev.target.closest('[data-lane]');
+  if (laneEl) { const a = laneEl.dataset.lane;
+                if (!a.startsWith('system:')) chooseAgent(a, 'focus', laneEl);
+                return; }
+  const bellEl = ev.target.closest('[data-id]');
+  if (!bellEl || !diagramData) return;
+  const b = diagramData.bells.find(x => x.id === bellEl.dataset.id);
+  if (!b) return;
+  diagramDetail.hidden = false;
+  diagramDetail.textContent =
+    (b.kind === 'operator' ? 'operator turn' : b.kind + ' bell') + ' ' + b.id
+    + '\n' + b.from + ' → ' + b.to
+    + '\nrung ' + (b.rung_at || '?') + ' · delivered ' + (b.delivered_at || '—')
+    + ' · replied ' + (b.replied_at || 'open')
+    + (b.state ? ' · ' + b.state : '');
+  diagramDetail.style.whiteSpace = 'pre-line';
+});
 (function restoreTab() {
   let saved = null;
   try { saved = localStorage.getItem('voxterm-tab'); } catch (_) {}
-  if (saved === 'frames') showTab('frames');
+  if (saved === 'frames' || saved === 'diagram') showTab(saved);
 })();
 let processSnapshot = null;
 function renderAgentSnapshots() {

@@ -21,7 +21,7 @@ import threading
 import time
 import wave
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import urlparse, parse_qs
+from urllib.parse import urlparse, parse_qs, quote as _urlquote
 from urllib.request import Request, urlopen
 from wm_queue_status import read_queue_status
 from wm_work_status import read_work_status
@@ -3322,6 +3322,19 @@ class Handler(BaseHTTPRequestHandler):
             except Exception as e:
                 self._send(200, json.dumps({"ok": False, "error": str(e),
                                             "agents": []}),
+                           "application/json")
+        elif path == "/diagram/dispatch":
+            # The cross-agent dispatch window as law-checked diagram data,
+            # forwarded server-side like the agency/* routes (no Caddy
+            # change needed for the phone page).
+            try:
+                q = parse_qs(urlparse(self.path).query)
+                hours = (q.get("hours") or ["3"])[0]
+                with urlopen("http://127.0.0.1:7070/api/alpha/diagram/dispatch?hours="
+                             + _urlquote(hours), timeout=20) as r:
+                    self._send(200, r.read(), "application/json")
+            except Exception as e:
+                self._send(502, json.dumps({"ok": False, "error": str(e)}),
                            "application/json")
         elif path == "/agency/procs":
             # The process tree under each invoked agent. The Agency JVM (the
