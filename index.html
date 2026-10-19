@@ -796,7 +796,7 @@ diagramHideSystem.addEventListener('change', renderDiagram);
 const turnSvg = $('#turnSvg'), turnHead = $('#turnHead'),
       turnDispatched = $('#turnDispatched');
 let diagramView = 'turn';            // 'turn' | 'dispatch'
-let turnList = null, turnAgent = null, turnIndex = 0, turnRecord = null;
+let turnList = null, turnAgent = null, turnIndex = 0, turnRecord = null, turnListAt = 0;
 const turnFetchLog = [];
 function setDiagramView(v) {
   diagramView = v;
@@ -808,6 +808,7 @@ function setDiagramView(v) {
   $('#diagramSvg').style.display = v === 'dispatch' ? '' : 'none';
   turnSvg.style.display = v === 'turn' ? '' : 'none';
   turnHead.style.display = v === 'turn' ? '' : 'none';
+  turnDispatched.style.display = v === 'turn' ? '' : 'none';
   try { localStorage.setItem('voxterm-diagram-view', v); } catch (_) {}
   if (v === 'dispatch') diagramEnsurePoll(); else turnEnsure();
 }
@@ -821,18 +822,31 @@ function turnEnsure() {
   if (viewDiagram.hidden) return;
   const agent = agentSnapshot && agentSnapshot.target && agentSnapshot.target.agent;
   if (!agent) { turnHead.textContent = 'No agent has the cursor — tap a chip in the Agents tab.'; return; }
-  if (agent !== turnAgent) {
-    turnAgent = agent; turnList = null; turnIndex = 0;
-    const url = 'xiang/turns?limit=100&agent=' + encodeURIComponent(agent);
-    turnFetchLog.push(url);
-    fetch(url, { cache: 'no-store' })
-      .then(r => r.json())
-      .then(d => { turnList = (d.turns || []);
-                   if (turnList.length) loadTurnRecord(turnList[turnIndex].id);
-                   else turnHead.textContent = 'No 象 records for ' + agent + ' yet.'; })
-      .catch(e => { turnHead.textContent = 'xiang unreachable: ' + e.message; });
-  }
+  // Refetch the list every 15 s while the view is open, so new turns appear
+  // and a record still being read is shown again once it has been analysed.
+  const stale = Date.now() - turnListAt > 15000;
+  if (agent !== turnAgent) { turnAgent = agent; turnList = null; turnIndex = 0; }
+  else if (!stale) return;
+  turnListAt = Date.now();
+  const url = 'xiang/turns?limit=100&agent=' + encodeURIComponent(agent);
+  turnFetchLog.push(url);
+  fetch(url, { cache: 'no-store' })
+    .then(r => r.json())
+    .then(d => {
+      if (agent !== turnAgent) return;
+      const shownId = turnList && turnList[turnIndex] && turnList[turnIndex].id;
+      turnList = (d.turns || []);
+      if (!turnList.length) { turnHead.textContent = 'No 象 records for ' + agent + ' yet.'; return; }
+      // Stay on the record being shown unless it was the newest; then follow the newest.
+      const keep = shownId && turnIndex > 0 ? turnList.findIndex(t => t.id === shownId) : -1;
+      turnIndex = keep >= 0 ? keep : 0;
+      const id = turnList[turnIndex].id;
+      if (id !== shownId || !turnRecord || turnRecord.analysis_status !== 'analyzed')
+        loadTurnRecord(id);
+    })
+    .catch(e => { turnHead.textContent = 'xiang unreachable: ' + e.message; });
 }
+function turnCreatedAt(t) { return t && (t['created-at'] || t.created_at); }
 function loadTurnRecord(id) {
   const url = 'xiang/turns/' + encodeURIComponent(id);
   turnFetchLog.push(url);
@@ -871,10 +885,16 @@ function renderTurn() {
     const v = (alignBy[a.id] || {}).verdict || 'not-answered';
     counts[v] = (counts[v] || 0) + 1;
   }
-  turnHead.textContent = Object.keys(counts).length
-    ? opActs.length + ' acts: ' + Object.entries(counts).map(([k, n]) => n + ' ' + k).join(', ')
-      + (align ? ' — read by ' + (align.seat || '馬') : ' — not read yet')
-    : 'no operator acts recorded';
+  // A record is read (split into acts, then aligned) only after the reply
+  // lands, so the newest turn is usually unread: say so, not 'no acts'.
+  const status = rec.analysis_status || 'unknown';
+  const unread = 'not read yet' + (status !== 'analyzed' ? ': ' + status : '');
+  turnHead.textContent = !opActs.length
+    ? (status === 'analyzed' ? 'no operator acts recorded' : unread)
+    : align
+      ? opActs.length + ' acts: ' + Object.entries(counts).map(([k, n]) => n + ' ' + k).join(', ')
+        + ' — read by ' + (align.seat || '馬')
+      : opActs.length + ' acts — ' + unread;
   // geometry: inputs on the left, boxes stacked right
   const W = 360, inX = 118, boxX = 208, boxW = 118, rowH = 26, pad = 6;
   const rows = Math.max(opActs.length, replyActs.length) + 1;
@@ -934,7 +954,7 @@ function renderTurnDispatched(rec) {
   const agent = turnAgent;
   if (!agent || !diagramData) return;
   const t0 = Date.parse(rec.created_at);
-  const next = turnList && turnIndex > 0 ? Date.parse(turnList[turnIndex - 1].created_at) : null;
+  const next = turnList && turnIndex > 0 ? Date.parse(turnCreatedAt(turnList[turnIndex - 1])) : null;
   const bells = (diagramData.bells || []).filter(b =>
     b.from === agent && Date.parse(b.rung_at) >= t0
     && (next === null || isNaN(next) || Date.parse(b.rung_at) < next));

@@ -19,20 +19,22 @@ const assert = require('node:assert/strict');
     return route.fulfill({json:{ok:true,agents:[],target:{agent:'claude-3',buffer:'*claude-3*'}}});
   if(p==='/xiang/turns' && !u.searchParams.get('limit').includes('record'))
     { turnRequests.push('list'); return route.fulfill({json:{ok:true,turns:[
-      {id:'newer', agent:'claude-3', created_at:'2026-10-19T03:00:00Z'},
-      {id:'turn-DHzkds', agent:'claude-3', created_at:'2026-10-19T01:00:00Z'},
-      {id:'older', agent:'claude-3', created_at:'2026-10-19T00:00:00Z'}]}}); }
+      // the list endpoint's keys are kebab-case (the record's are snake_case)
+      {id:'newer', 'agent-id':'claude-3', 'created-at':'2026-10-19T03:00:00Z'},
+      {id:'turn-DHzkds', 'agent-id':'claude-3', 'created-at':'2026-10-19T01:00:00Z'},
+      {id:'older', 'agent-id':'claude-3', 'created-at':'2026-10-19T00:00:00Z'}]}}); }
   if(p==='/xiang/turns/turn-DHzkds')
     { turnRequests.push('record:turn-DHzkds'); return route.fulfill({json:{ok:true,record}}); }
   if(p.startsWith('/xiang/turns/'))
     { turnRequests.push('record:' + p.split('/').pop());
       return route.fulfill({json:{ok:true,record:JSON.parse(JSON.stringify(record))}}); }
   if(p==='/diagram/dispatch')
-    return route.fulfill({json:{ok:true,window:{from:'2026-10-19T00:00:00Z',to:'2026-10-19T03:00:00Z'},
-      lanes:['joe','claude-3','zai-5','zai-6'],bells:[
+    return route.fulfill({json:{ok:true,window:{from:'2026-10-19T00:00:00Z',to:'2026-10-19T03:30:00Z'},
+      lanes:['joe','claude-3','zai-5','zai-6','zai-7'],bells:[
         {id:'b1',from:'claude-3',to:'zai-5',kind:'bell',rung_at:'2026-10-19T02:40:00Z',delivered_at:'2026-10-19T02:41:00Z',replied_at:'2026-10-19T02:50:00Z',state:'done'},
-        {id:'b2',from:'claude-3',to:'zai-6',kind:'bell',rung_at:'2026-10-19T02:55:00Z',state:'running'}],
-      open:['b2'],crossings:[],lawful:true,findings:{}}});
+        {id:'b2',from:'claude-3',to:'zai-6',kind:'bell',rung_at:'2026-10-19T02:55:00Z',state:'running'},
+        {id:'b3',from:'claude-3',to:'zai-7',kind:'bell',rung_at:'2026-10-19T03:10:00Z',state:'running'}],
+      open:['b2','b3'],crossings:[],lawful:true,findings:{}}});
   if(p==='/usage') return route.fulfill({json:{ok:true,providers:{}}});
   if(p==='/target') return route.fulfill({json:{ok:true}});
   return route.fulfill({json:{ok:true,agents:[],choices:[],text:null}});
@@ -89,13 +91,19 @@ const assert = require('node:assert/strict');
  assert.match(await page.locator('#diagramDetail').innerText(), /answered by claude-3-turn-54-r-0/);
  assert.match(await page.locator('#diagramDetail').innerText(), /quote/);
 
- // dispatched line from the dispatch data between this turn and the next
- assert.match(await page.locator('#turnDispatched').innerText(), /dispatched: zai-5 \(done\), zai-6 \(running\)/);
+ // dispatched line: on the newest turn there is no next turn, so every bell
+ // rung after it counts, including b3 at 03:10
+ assert.equal(await page.locator('#turnDispatched').innerText(),
+              'dispatched: zai-5 (done), zai-6 (running), zai-7 (running)');
 
  // (f) ‹ requests the previous turn's record, › the next
  await page.locator('#turnPrevBtn').click();
  await page.waitForTimeout(200);
  assert.equal(turnRequests[turnRequests.length-1], 'record:turn-DHzkds', '‹ steps to the earlier turn');
+ // on turn-DHzkds the next turn starts at 03:00 ('created-at' in the list),
+ // so b3 belongs to the next turn and is left out
+ assert.equal(await page.locator('#turnDispatched').innerText(),
+              'dispatched: zai-5 (done), zai-6 (running)');
  await page.locator('#turnNextBtn').click();
  await page.waitForTimeout(200);
  assert.equal(turnRequests[turnRequests.length-1], 'record:newer', '› steps back to the newest');
@@ -106,15 +114,25 @@ const assert = require('node:assert/strict');
      const bare = JSON.parse(JSON.stringify(record)); delete bare.alignment; return bare; })()}}));
  await page.evaluate(() => { turnIndex = 1; loadTurnRecord('turn-DHzkds'); });
  await page.waitForTimeout(300);
- assert.match(await page.locator('#turnHead').innerText(), /not read yet/);
+ assert.equal(await page.locator('#turnHead').innerText(), '4 acts — not read yet');
  assert.equal(await page.locator('#turnSvg .wire.loose').count(), opActs.length);
+
+ // the turn in flight: acts are split out only after the reply, so the
+ // header names the status instead of claiming no acts were recorded
+ await page.route('**/xiang/turns/turn-DHzkds', route =>
+   route.fulfill({json:{ok:true,record:(() => {
+     const bare = JSON.parse(JSON.stringify(record)); delete bare.alignment;
+     bare.acts = []; bare.analysis_status = 'requested'; return bare; })()}}));
+ await page.evaluate(() => { loadTurnRecord('turn-DHzkds'); });
+ await page.waitForTimeout(300);
+ assert.equal(await page.locator('#turnHead').innerText(), 'not read yet: requested');
 
  // (g) the Dispatch view still renders the old diagram
  await page.locator('#diagViewDispatchBtn').click();
  await page.waitForTimeout(300);
  assert.equal(await page.locator('#diagramSvg').isVisible(), true);
  assert.equal(await page.locator('#turnSvg').evaluate(el => getComputedStyle(el).display), 'none');
- assert.equal(await page.locator('#diagramSvg path.bell').count(), 2);
+ assert.equal(await page.locator('#diagramSvg path.bell').count(), 3);
  await browser.close();
  console.log('test_turn_view.cjs: all assertions passed');
  process.exit(0);
