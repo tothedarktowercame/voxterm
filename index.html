@@ -806,6 +806,7 @@ const cascadeSvg = $('#cascadeSvg'), cascadeHead = $('#cascadeHead');
 let cascadeData = null, cascadeFocus = null;   // focus: a fragment key, 's1-0'
 const cascadeFetchLog = [];
 let turnList = null, turnAgent = null, turnIndex = 0, turnRecord = null, turnListAt = 0;
+let turnFollow = true, turnFellBack = false;   // see followNewest
 const turnFetchLog = [];
 function setDiagramView(v) {
   diagramView = v;
@@ -840,7 +841,7 @@ function turnEnsure() {
   // Refetch the list every 15 s while the view is open, so new turns appear
   // and a record still being read is shown again once it has been analysed.
   const stale = Date.now() - turnListAt > 15000;
-  if (agent !== turnAgent) { turnAgent = agent; turnList = null; turnIndex = 0; }
+  if (agent !== turnAgent) { turnAgent = agent; turnList = null; turnIndex = 0; turnFollow = true; }
   else if (!stale) return;
   turnListAt = Date.now();
   const url = 'xiang/turns?limit=100&agent=' + encodeURIComponent(agent);
@@ -852,14 +853,41 @@ function turnEnsure() {
       const shownId = turnList && turnList[turnIndex] && turnList[turnIndex].id;
       turnList = (d.turns || []);
       if (!turnList.length) { turnHead.textContent = 'No 象 records for ' + agent + ' yet.'; return; }
-      // Stay on the record being shown unless it was the newest; then follow the newest.
-      const keep = shownId && turnIndex > 0 ? turnList.findIndex(t => t.id === shownId) : -1;
+      // Following the newest: a record is marked analyzed before its acts are
+      // split out, so a newer turn with no acts yet leaves the last one that
+      // has them on screen. Reload the shown record until its acts arrive.
+      if (turnFollow && shownId !== turnList[0].id) return followNewest(0, null);
+      const keep = shownId ? turnList.findIndex(t => t.id === shownId) : -1;
       turnIndex = keep >= 0 ? keep : 0;
       const id = turnList[turnIndex].id;
-      if (id !== shownId || !turnRecord || turnRecord.analysis_status !== 'analyzed')
+      if (id !== shownId || !turnRecord || !hasOperatorActs(turnRecord))
         loadTurnRecord(id);
     })
     .catch(e => { turnHead.textContent = 'xiang unreachable: ' + e.message; });
+}
+function hasOperatorActs(rec) {
+  return (rec.acts || []).some(a => a.author === 'operator' && a.turn === rec.turn_id);
+}
+// Show the newest record that has operator acts, looking back at most three
+// turns; if none has, show the newest as it is.
+function followNewest(k, newest) {
+  const agent = turnAgent, id = turnList[k].id;
+  const url = 'xiang/turns/' + encodeURIComponent(id);
+  turnFetchLog.push(url);
+  fetch(url, { cache: 'no-store' })
+    .then(r => r.json())
+    .then(d => {
+      if (agent !== turnAgent || !turnFollow) return;
+      const rec = d.record || null;
+      newest = newest || rec;
+      if (rec && !hasOperatorActs(rec) && k < Math.min(3, turnList.length - 1))
+        return followNewest(k + 1, newest);
+      const use = rec && hasOperatorActs(rec) ? k : 0;
+      turnIndex = use; turnFellBack = use > 0;
+      turnRecord = use === k ? rec : newest;
+      renderTurn(); cascadeEnsure();
+    })
+    .catch(e => { turnHead.textContent = 'turn fetch failed: ' + e.message; });
 }
 function turnCreatedAt(t) { return t && (t['created-at'] || t.created_at); }
 function loadTurnRecord(id) {
@@ -867,7 +895,7 @@ function loadTurnRecord(id) {
   turnFetchLog.push(url);
   fetch(url, { cache: 'no-store' })
     .then(r => r.json())
-    .then(d => { turnRecord = d.record || null; renderTurn(); cascadeEnsure(); })
+    .then(d => { turnRecord = d.record || null; turnFellBack = false; renderTurn(); cascadeEnsure(); })
     .catch(e => { turnHead.textContent = 'turn fetch failed: ' + e.message; });
 }
 $('#turnPrevBtn').addEventListener('click', () => stepTurn(1));   // list is newest-first
@@ -875,7 +903,9 @@ $('#turnNextBtn').addEventListener('click', () => stepTurn(-1));
 function stepTurn(delta) {
   if (!turnList || !turnList.length) return;
   const next = Math.min(turnList.length - 1, Math.max(0, turnIndex + delta));
-  if (next !== turnIndex) { turnIndex = next; loadTurnRecord(turnList[turnIndex].id); }
+  // stepping by hand shows exactly the turn asked for; back at the newest,
+  // following resumes once a newer turn arrives
+  if (next !== turnIndex) { turnIndex = next; turnFollow = next === 0; loadTurnRecord(turnList[turnIndex].id); }
 }
 
 // 象's marks (futon3 turnfeed/core.cljs intent-mark; keep the two in step)
@@ -930,6 +960,9 @@ function renderTurn() {
       ? opActs.length + ' acts: ' + Object.entries(counts).map(([k, n]) => n + ' ' + k).join(', ')
         + ' — read by ' + (align.seat || '馬')
       : opActs.length + ' acts — ' + unread;
+  if (turnFellBack)
+    turnHead.textContent = 'newest turn not read yet — showing the last one read\n' + turnHead.textContent;
+  turnHead.style.whiteSpace = 'pre-line';
   // geometry, read top to bottom: operator acts down the left, reply
   // paragraphs down the right; each answered act wires down and across to
   // its paragraph, and a loose end drops to the rail at the bottom.
