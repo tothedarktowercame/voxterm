@@ -1358,6 +1358,15 @@ def _jvm_service(args):
     return None
 
 
+def ma_card_work(entries, turn):
+    """The 馬 card body for one turn: entries whose body turn-evidence-id
+    equals TURN, latest body "at" first; None when 馬 has not read it."""
+    cards = [e.get("evidence/body", {}) for e in (entries or [])
+             if (e.get("evidence/body", {}) or {}).get("turn-evidence-id") == turn]
+    cards.sort(key=lambda b: str(b.get("at") or ""))
+    return cards[-1] if cards else None
+
+
 def agency_procs():
     """{ok, jvm, agents:[{id, pid, start, tree:[...]}], unmatched:[...]}."""
     jvm = _agency_jvm_pid()
@@ -3356,6 +3365,25 @@ class Handler(BaseHTTPRequestHandler):
                              + urlparse(self.path).path[len("/xiang/turns"):]
                              + ("?" + q if q else ""), timeout=20) as r:
                     self._send(200, r.read(), "application/json")
+            except Exception as e:
+                self._send(502, json.dumps({"ok": False, "error": str(e)}),
+                           "application/json")
+        elif path == "/xiang/card":
+            # 馬's checked work record for one turn: the card whose
+            # turn-evidence-id matches the turn record's evidence_id, latest
+            # when several match, null when 馬 has not read the turn.
+            try:
+                q = parse_qs(urlparse(self.path).query)
+                session, turn = (q.get("session") or [""])[0], (q.get("turn") or [""])[0]
+                with urlopen("http://127.0.0.1:7070/api/alpha/evidence?session-id="
+                             + _urlquote(session) + "&tag=ma-card&limit=200", timeout=10) as r:
+                    entries = json.load(r).get("entries") or []
+                body = ma_card_work(entries, turn)
+                card = (body or {}).get("card") or {}
+                work = ((card.get("fresh") or {}).get("work"))
+                self._send(200, json.dumps({"ok": True,
+                                            "work": work if work is not None else None,
+                                            "card_at": (body or {}).get("at")}), "application/json")
             except Exception as e:
                 self._send(502, json.dumps({"ok": False, "error": str(e)}),
                            "application/json")

@@ -341,6 +341,7 @@
       <label><input type="checkbox" id="diagramHideSystem" checked> hide system lanes</label>
     </div>
     <div id="turnHead"></div>
+    <div id="turnWork" hidden style="cursor:pointer;"></div>
     <svg id="turnSvg" xmlns="http://www.w3.org/2000/svg" role="img"
          aria-label="one turn's string diagram"
          style="width:100%;height:auto;border:1px solid var(--dim);border-radius:8px;touch-action:manipulation;"></svg>
@@ -883,7 +884,7 @@ function followNewest(k, newest) {
       const use = rec && hasOperatorActs(rec) ? k : 0;
       turnIndex = use; turnFellBack = use > 0;
       turnRecord = use === k ? rec : newest;
-      renderTurn(); cascadeEnsure();
+      renderTurn(); cascadeEnsure(); loadTurnWork();
     })
     .catch(e => { turnHead.textContent = 'turn fetch failed: ' + e.message; });
 }
@@ -893,9 +894,60 @@ function loadTurnRecord(id) {
   turnFetchLog.push(url);
   fetch(url, { cache: 'no-store' })
     .then(r => r.json())
-    .then(d => { turnRecord = d.record || null; turnFellBack = false; renderTurn(); cascadeEnsure(); })
+    .then(d => { turnRecord = d.record || null; turnFellBack = false; renderTurn(); cascadeEnsure(); loadTurnWork(); })
     .catch(e => { turnHead.textContent = 'turn fetch failed: ' + e.message; });
 }
+// 馬's checked work record for the shown turn: which known work this turn
+// addresses. Reset before every fetch so a failed load never leaves another
+// turn's line on screen.
+let turnWorkRecord = null;
+function loadTurnWork() {
+  const rec = turnRecord;
+  turnWorkRecord = null;
+  const workEl = $('#turnWork');
+  workEl.hidden = true;
+  if (!rec) return;
+  if (!rec.evidence_id) { setWorkLine('Work: not read yet'); return; }
+  fetch('xiang/card?session=' + encodeURIComponent(rec.session_id || '')
+        + '&turn=' + encodeURIComponent(rec.evidence_id), { cache: 'no-store' })
+    .then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+    .then(d => {
+      // a different turn loaded meanwhile: compare evidence ids, not object
+      // identity — the poll can replace turnRecord with an equal copy.
+      if (((turnRecord || {}).evidence_id) !== ((rec || {}).evidence_id)) return;
+      turnWorkRecord = d.work;
+      const w = d.work;
+      if (!w) setWorkLine('Work: not read yet');
+      else if (w.rejected !== undefined)
+        setWorkLine('Work: 馬’s answer rejected (' + w.rejected + ')', 'warn');
+      else if (w.item !== undefined)
+        setWorkLine('Work: ' + cut80(String(w.item)) + ' — “' + cut80(String(w.quote)) + '”');
+      else if (w.none !== undefined) setWorkLine('Work: none — ' + w.none);
+      else setWorkLine('Work: not read yet');
+    })
+    .catch(() => {
+      if (((turnRecord || {}).evidence_id) === ((rec || {}).evidence_id))
+        setWorkLine('Work: (unavailable)'); });
+}
+function cut80(s) { const t = s.replace(/\s+/g,' ').trim(); return t.length > 80 ? t.slice(0,79) + '…' : t; }
+function setWorkLine(text, kind) {
+  const el = $('#turnWork');
+  el.hidden = false;
+  el.textContent = text;
+  el.style.color = kind === 'warn' ? '#f80' : 'var(--dim)';
+  el.style.fontSize = '12px';
+}
+$('#turnWork').addEventListener('click', () => {
+  const w = turnWorkRecord;
+  if (!w) return;
+  diagramDetail.hidden = false;
+  diagramDetail.style.whiteSpace = 'pre-line';
+  diagramDetail.textContent = w.rejected !== undefined
+    ? 'rejected: ' + w.rejected + '\nitem: ' + (w.item || '') + '\nquote: ' + (w.quote || '')
+    : (w.item !== undefined
+        ? 'Work item: ' + w.item + '\nquote: ' + (w.quote || '')
+        : JSON.stringify(w));
+});
 $('#turnPrevBtn').addEventListener('click', () => stepTurn(1));   // list is newest-first
 $('#turnNextBtn').addEventListener('click', () => stepTurn(-1));
 function stepTurn(delta) {

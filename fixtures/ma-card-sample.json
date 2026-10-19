@@ -1,0 +1,364 @@
+{
+ "entries": [
+  {
+   "evidence/origin": {
+    "kind": "agent",
+    "actor": "馬",
+    "writer": "futon3c/scripts/ma_observe.py",
+    "attributed-author": "馬",
+    "authorization": "unknown",
+    "recorded-at": "2026-10-19T03:41:45Z",
+    "basis": "write-time"
+   },
+   "evidence/body": {
+    "event": "agent-card",
+    "at": "2026-10-19T03:41:45Z",
+    "turn-evidence-id": "emacs-8b01487d799a38b3f1af36069283676e",
+    "observed-agent": "claude-3",
+    "card": {
+     "settled": {
+      "engaged": {
+       "excursion-id": "E-prove-memory-useful"
+      },
+      "done": [
+       "✅ Diagram-panel JSON error resolved (voxterm restart at 2:47) — user's 2:46 report fixed, verified on phone-width screenshot",
+       "✅ User's question (are turns recorded and analyzed?) answered — yes; the message is the in-flight-newest-turn display flaw, not missing recording",
+       "✅ Stepper roster/session timing error fixed and live (futon3c 3870d5e94) — resolves the user's 2:54 report",
+       "✅ (2:58) Push question resolved — user approved pushing; voxterm `fe4dbe5..fde07cd` was already on `origin/master` (fetch showed nothing ahead/behind), nothing left to push — closes the 2:56 🈸",
+       "✅ (3:04) Turn-view rotation completed by the agent itself and live on `origin/master` as voxterm `843e2b5` — fulfils the user's 2:58 rotation directive without Codex",
+       "✅ (3:15) Cascade view built, tested, and live — commits `898d7d7` (Cascade view) and `3856752` (Turn-view fallback) landed on `origin/master`, voxterm restarted; reach it as **Cascade** next to Turn and Dispatch in the Diagram tab",
+       "✅ Turn-view fallback landed (fulfils user's 3:05 ask, closes the 2:48 display fixes): while the newest turn has no acts, the view shows the latest of the last four turns that has them, header reads \"newest turn not read yet — showing the last one read\", auto-advances to the newest turn once its acts arrive; ‹ › stepping still shows exactly the picked turn",
+       "✅ The 3:15 \"please show that\" ambiguity resolved — user's 3:19 review confirms the Cascade view itself was meant; the rotated-Turn-view screenshot offer is moot",
+       "✅ Fixed and pushed (voxterm `1fdbf32`): the \"library: parents\" section now comes before \"proposed as new\", so parents sit above the proposals that name them; test now requires a parent above its child (fails on old layout, passes new); page-only change — reload the Diagram tab to see it",
+       "✅ (3:24) Cascade merged into the Turn view as its own pane — voxterm `581fced` pushed, master fast-forwarded; no separate Cascade view any more; built in a separate worktree per the 2:47 policy; reload the Diagram tab to see it",
+       "✅ (3:30) Frames-pane reorder live (voxterm `2b22d9980`, published): the two sections above FUTON'S VIEW were CARD (the ✅ list) and CASCADE — both describe the whole session, not the turn — now moved to the bottom folded under \"BACKGROUND\"; pane opens on the turn itself; live order reads FUTON'S VIEW, SAID, OPERATORS … MEMORY, BACKGROUND last; reorder compiles, stepper test passes (test checks page data, not layout); order checked on the live page at phone width",
+       "✅ both zai-1 jobs (commit-attribution fix, alignment-reading packet) done"
+      ],
+      "commits": {
+       "count": 71,
+       "last": [
+        "d01572b87 Feed terminal injuries into META self-heal selection",
+        "2020c729a Restore charged but unbound campaign click",
+        "5917aa38c Publish repair ticket T-repair-occ-d16904991c7b8b5588112d862800e10a8bae0d6f3d77914946d56920ec187131 (finding repair-occ-d16904991c7b8b5588112d862800e10a8bae0d6f3d77914946d56920ec187131)",
+        "3990ddcfc Route META algorithms into self-heal execution",
+        "2b22d9980 stepper: 馬's card and the Cascade slice go last, folded"
+       ]
+      },
+      "mission-patterns": []
+     },
+     "standing": {
+      "purpose": {
+       "text": "Awaiting user's answers to the 3:40 asks: restart the 馬 watcher so the purpose-reset fix (8bb7f1877) and zai-5's work records go live, then send packet 2 (Diagram-tab 'Work:' line) to zai-5; frames-tab 'same mission' display fix also awaiting go; zai-5's first work-record packet in flight with review plan queued",
+       "held": 1
+      },
+      "packet-vs-purpose": "",
+      "xiang-patterns": [
+       [
+        "apparatus/done-is-observed-running",
+        4
+       ],
+       [
+        "system-coherence/turn-design-into-checks",
+        2
+       ],
+       [
+        "cascades/the-slice-is-the-unit-of-use",
+        2
+       ],
+       [
+        "gauntlet/co-presence-over-co-location",
+        2
+       ],
+       [
+        "musn/aif-live-scores",
+        2
+       ],
+       [
+        "problems/deliberate-refusals-allude-to-unwritten-patterns",
+        2
+       ],
+       [
+        "vsatlatarium/sky-disk-continuum",
+        2
+       ]
+      ],
+      "open-threads": [
+       {
+        "text": "🈸 awaiting user: restart 馬 watcher (bg-1792272993376-64 still on old code; fix + zai-5 work records won't show on cards until then) and then send packet 2, the Diagram-tab 'Work:' line, to zai-5",
+        "held": 1
+       },
+       {
+        "text": "🈸 awaiting user: frames-tab 'same mission' display fix — futon_view.py + stepper.js showing current job from the invoke ledger, 馬 purpose second and only if the card postdates the job",
+        "held": 1
+       },
+       {
+        "text": "zai-5's first work-record packet running (invoke-1792380866567-17025-48cccad8, park-38b6e773…, 45-min deadline from 3:34); review plan queued: verify tests reject a paraphrased item and a one-word-changed phrase, show user the known-work list and a real record, then packet 2",
+        "held": 1
+       },
+       {
+        "text": "Live check of the purpose-reset deferred to zai-1's next packet — dry run on zai-1's session printed nothing (no turn waiting)",
+        "held": 1
+       }
+      ],
+      "repair": [
+       {
+        "text": "Frames tab 'same mission' line shows stale 馬 purpose — 馬 half FIXED in code (8bb7f1877): new-packet Zai/Kimi turns drop purpose + packet_vs_purpose from the previous card via carried(), continuation/operator turns unchanged, 22 tests pass, not live until watcher restarts; display half (futon_view.py + stepper.js, current job from invoke ledger) still awaiting user go",
+        "held": 1
+       },
+       {
+        "text": "Diagram tab JSON parse error (user 2:46) — FIXED: zai-5's half-built Turn view was live on disk while its xiang/turns route lived only in the unrestarted server; voxterm restarted 2:47, routes live; policy: future voxterm packets build in a separate worktree, land page+route together; first check on a mid-packet voxterm error is uncommitted agent edits",
+        "held": 8
+       },
+       {
+        "text": "Codex REPL replies never attached + Emacs stepper dropped turns mid-fetch — both FIXED & LIVE: turn-stepper.el (969de94d6) and session-turn-analysis.el loaded into user's Emacs 2:39; 20 s reconcile running, stepper current at 37 frames",
+        "held": 12
+       },
+       {
+        "text": "Zai turns at round cap/interrupt/wall clock wrote no final row — zai_api now writes one final round per turn with stop reason; reload pending until Zai seats idle (bg bg-1792274967426-72)",
+        "held": 20
+       },
+       {
+        "text": "zai-7 refused every turn (no context policy, unlike Kimi's 512k default; same as 186 refusals 2026-08-12) — single-seat reset restored it; T3 to make Zai seats self-recover still running",
+        "held": 20
+       },
+       {
+        "text": "Turn view stuck on 'no operator acts recorded' — FIXED & LIVE (3856752): 象 marks records analyzed before writing acts and the 15 s refresh skipped analyzed records, so the message persisted; view now falls back to the latest of the last four turns with acts, header says 'newest turn not read yet — showing the last one read'",
+        "held": 6
+       }
+      ],
+      "ramifications": [
+       {
+        "text": "Agent's purpose-reset commit 8bb7f1877 edited ma_observe.py directly while zai-5's work-record packet is in flight on the same file — zai-5's landing may need to account for it; carried() dropping the old purpose also keeps stale purposes out of the fresh.work known-work list; frames display fix (futon_view.py + stepper.js) still conflicts with nothing zai-5 edits",
+        "held": 1
+       },
+       {
+        "text": "xiang_turn_check.py gives observability without a third screen (flags --hours/--agent/--list); covers §8 I11 and I12; now also the success test for zai-7/zai-1 fixes (codex-68 replies attached, no new 'commit acts from another seat' lines); I3 still only ever checked live once",
+        "held": 22
+       },
+       {
+        "text": "Cascade pane builds on per-turn 象 data (pattern_refs, rejections with reason+query, candidates with required parent, BM25 hits); prompt-retriever picks read from the seat's Claude transcript because 象 doesn't keep them — other seats show 'prompt picks not recorded'; library @why/@how prose links leave one-hop neighbourhoods sparse until converted to ids",
+        "held": 5
+       },
+       {
+        "text": "Turn finalisation is a JVM event (:turn-final at boundary/append!, :pre sync observe-only + :post background for 馬); live via proof-eval now, in http.clj requires at next restart",
+        "held": 29
+       },
+       {
+        "text": "memory-2026's per-pattern Formal notes record: 3 of 9 patterns partial in Lean, 6 none; carrier slice would give M3 its first formal spec; routing preference saved: all memory/carrier work goes to Zai runners",
+        "held": 23
+       },
+       {
+        "text": "Per-seat session reset (POST /api/alpha/agents/<seat>/reset-session) clears one seat's context with no JVM restart — recovery lever for any Zai seat refusing turns; four concurrent Zai seats acceptable when the 5-hour window is low",
+        "held": 12
+       }
+      ]
+     },
+     "fresh": {
+      "done": [
+       "✅ (3:40) Purpose-reset fix implemented — commit `8bb7f1877` in `scripts/ma_observe.py`, written by the agent itself (few lines, so not sent to zai-5); new `carried()` function checks the incoming turn before 馬 sees the previous card: a Zai or Kimi seat turn not starting with 馬's `CONTINUATION` header (i.e. a new packet) gets the previous card without `purpose` and `packet_vs_purpose`; continuation turns and operator turns keep the card unchanged; open threads, repairs, ramifications still carry; `packet_vs_purpose` also dropped as it compares old packet with old purpose"
+      ],
+      "problems": [
+       "🔴 (3:38) User endorsed the 馬 purpose-reset fix — \"a minor but pretty logically important fix to make regarding the purpose not being carried forward\" — go-ahead for the ma_observe.py change",
+       "🔴 (3:40) Not live yet: the 馬 watcher `bg-1792272993376-64` still runs the old code — neither this fix nor zai-5's work records will appear on cards until it restarts",
+       "🔴 (3:40) Agent asked (🈸, open): restart the 馬 watcher, then send packet 2 — the Diagram-tab \"Work:\" line — to zai-5? The Frames-tab \"same mission\" display fix also still awaits the user's go"
+      ],
+      "work": {
+       "item": "Awaiting user's go on the frames-tab stale-purpose fix: display change now (futon_view.py + stepper.js showing current job from the invoke ledger) plus the 馬 purpose-reset as a follow-up packet behind zai-5's ma_observe.py work; meanwhile zai-5's first work-record packet runs with the review plan queued",
+       "quote": "logically important fix to make regarding the purpose not being carried forward"
+      }
+     }
+    }
+   },
+   "evidence/session-id": "ff41903c-6510-4c5e-a293-01324d39fb45",
+   "evidence/tags": [
+    "ma-card"
+   ],
+   "evidence/at": "2026-10-19T03:41:45.847741767Z",
+   "evidence/type": "coordination",
+   "evidence/subject": {
+    "ref/type": "session",
+    "ref/id": "ff41903c-6510-4c5e-a293-01324d39fb45"
+   },
+   "evidence/author": "馬",
+   "evidence/claim-type": "observation",
+   "evidence/id": "e-e8422ffe-f977-4d28-b937-9d9dc54ae5e8"
+  },
+  {
+   "evidence/origin": {
+    "kind": "agent",
+    "actor": "馬",
+    "writer": "futon3c/scripts/ma_observe.py",
+    "attributed-author": "馬",
+    "authorization": "unknown",
+    "recorded-at": "2026-10-19T03:38:20Z",
+    "basis": "write-time"
+   },
+   "evidence/body": {
+    "event": "agent-card",
+    "at": "2026-10-19T03:38:20Z",
+    "turn-evidence-id": "emacs-37ae9f68670c3ae826b119a522a8c91d",
+    "observed-agent": "claude-3",
+    "card": {
+     "settled": {
+      "engaged": {
+       "excursion-id": "E-prove-memory-useful"
+      },
+      "done": [
+       "✅ Frames-tab 404 root-caused and fixed (futon3c 86cd03893) — resolves the user's 2:39 report",
+       "✅ Diagram-panel JSON error resolved (voxterm restart at 2:47) — user's 2:46 report fixed, verified on phone-width screenshot",
+       "✅ User's question (are turns recorded and analyzed?) answered — yes; the message is the in-flight-newest-turn display flaw, not missing recording",
+       "✅ Stepper roster/session timing error fixed and live (futon3c 3870d5e94) — resolves the user's 2:54 report",
+       "✅ (2:58) Push question resolved — user approved pushing; voxterm `fe4dbe5..fde07cd` was already on `origin/master` (fetch showed nothing ahead/behind), nothing left to push — closes the 2:56 🈸",
+       "✅ (3:04) Turn-view rotation completed by the agent itself and live on `origin/master` as voxterm `843e2b5` — fulfils the user's 2:58 rotation directive without Codex",
+       "✅ (3:15) Cascade view built, tested, and live — commits `898d7d7` (Cascade view) and `3856752` (Turn-view fallback) landed on `origin/master`, voxterm restarted; reach it as **Cascade** next to Turn and Dispatch in the Diagram tab",
+       "✅ Turn-view fallback landed (fulfils user's 3:05 ask, closes the 2:48 display fixes): while the newest turn has no acts, the view shows the latest of the last four turns that has them, header reads \"newest turn not read yet — showing the last one read\", auto-advances to the newest turn once its acts arrive; ‹ › stepping still shows exactly the picked turn",
+       "✅ The 3:15 \"please show that\" ambiguity resolved — user's 3:19 review confirms the Cascade view itself was meant; the rotated-Turn-view screenshot offer is moot",
+       "✅ Fixed and pushed (voxterm `1fdbf32`): the \"library: parents\" section now comes before \"proposed as new\", so parents sit above the proposals that name them; test now requires a parent above its child (fails on old layout, passes new); page-only change — reload the Diagram tab to see it",
+       "✅ (3:24) Cascade merged into the Turn view as its own pane — voxterm `581fced` pushed, master fast-forwarded; no separate Cascade view any more; built in a separate worktree per the 2:47 policy; reload the Diagram tab to see it",
+       "✅ (3:30) Frames-pane reorder live (voxterm `2b22d9980`, published): the two sections above FUTON'S VIEW were CARD (the ✅ list) and CASCADE — both describe the whole session, not the turn — now moved to the bottom folded under \"BACKGROUND\"; pane opens on the turn itself; live order reads FUTON'S VIEW, SAID, OPERATORS … MEMORY, BACKGROUND last; reorder compiles, stepper test passes (test checks page data, not layout); order checked on the live page at phone width"
+      ],
+      "commits": {
+       "count": 71,
+       "last": [
+        "d01572b87 Feed terminal injuries into META self-heal selection",
+        "2020c729a Restore charged but unbound campaign click",
+        "5917aa38c Publish repair ticket T-repair-occ-d16904991c7b8b5588112d862800e10a8bae0d6f3d77914946d56920ec187131 (finding repair-occ-d16904991c7b8b5588112d862800e10a8bae0d6f3d77914946d56920ec187131)",
+        "3990ddcfc Route META algorithms into self-heal execution",
+        "2b22d9980 stepper: 馬's card and the Cascade slice go last, folded"
+       ]
+      },
+      "mission-patterns": []
+     },
+     "standing": {
+      "purpose": {
+       "text": "Awaiting user's go on the frames-tab stale-purpose fix: display change now (futon_view.py + stepper.js showing current job from the invoke ledger) plus the 馬 purpose-reset as a follow-up packet behind zai-5's ma_observe.py work; meanwhile zai-5's first work-record packet runs with the review plan queued",
+       "held": 1
+      },
+      "packet-vs-purpose": "",
+      "xiang-patterns": [
+       [
+        "apparatus/done-is-observed-running",
+        4
+       ],
+       [
+        "system-coherence/turn-design-into-checks",
+        2
+       ],
+       [
+        "cascades/the-slice-is-the-unit-of-use",
+        2
+       ],
+       [
+        "gauntlet/co-presence-over-co-location",
+        2
+       ],
+       [
+        "musn/aif-live-scores",
+        2
+       ],
+       [
+        "problems/deliberate-refusals-allude-to-unwritten-patterns",
+        2
+       ],
+       [
+        "vsatlatarium/sky-disk-continuum",
+        2
+       ]
+      ],
+      "open-threads": [
+       {
+        "text": "🈸 awaiting user: do the frames display fix now and send the 馬 purpose-reset packet after zai-5's work record lands",
+        "held": 1
+       },
+       {
+        "text": "awaiting zai-5 reply (job invoke-1792380866567-17025-48cccad8, 45-min deadline): verify tests reject a paraphrased item and a one-word-changed phrase, show user the known-work list and a real fresh.work record, then send second packet (Diagram-tab Work: line), then the 馬 cascade pass",
+        "held": 1
+       },
+       {
+        "text": "monitor Zai jobs M3c/M1/M2/T3; load zai_api live when seats idle (bg bg-1792274967426-72)",
+        "held": 1
+       }
+      ],
+      "repair": [
+       {
+        "text": "Frames tab 'same mission' line shows stale 馬 purpose — zai-1's reused session zai-621dee… has carried 'Prove t95J03_torus_bridge' (17 Oct Lean proof) on every card; fix planned: display shows current job from invoke ledger (futon_view.py + stepper.js, no conflict with zai-5) + 馬 starts a new purpose per dispatch (ma_observe.py, follow-up packet after zai-5's work); awaiting user go",
+        "held": 1
+       },
+       {
+        "text": "Diagram tab JSON parse error (user 2:46) — FIXED: zai-5's half-built Turn view was live on disk while its xiang/turns route lived only in the unrestarted server; voxterm restarted 2:47, routes live; policy: future voxterm packets build in a separate worktree, land page+route together; first check on a mid-packet voxterm error is uncommitted agent edits",
+        "held": 7
+       },
+       {
+        "text": "Codex REPL replies never attached + Emacs stepper dropped turns mid-fetch — both FIXED & LIVE: turn-stepper.el (969de94d6) and session-turn-analysis.el loaded into user's Emacs 2:39; 20 s reconcile running, stepper current at 37 frames",
+        "held": 11
+       },
+       {
+        "text": "Zai turns at round cap/interrupt/wall clock wrote no final row — zai_api now writes one final round per turn with stop reason; reload pending until Zai seats idle (bg bg-1792274967426-72)",
+        "held": 19
+       },
+       {
+        "text": "zai-7 refused every turn (no context policy, unlike Kimi's 512k default; same as 186 refusals 2026-08-12) — single-seat reset restored it; T3 to make Zai seats self-recover still running",
+        "held": 19
+       },
+       {
+        "text": "Turn view stuck on 'no operator acts recorded' — FIXED & LIVE (3856752): 象 marks records analyzed before writing acts and the 15 s refresh skipped analyzed records, so the message persisted; view now falls back to the latest of the last four turns with acts, header says 'newest turn not read yet — showing the last one read'",
+        "held": 5
+       }
+      ],
+      "ramifications": [
+       {
+        "text": "Frames display fix (futon_view.py + stepper.js) touches nothing zai-5 is editing so it can land while zai-5's ma_observe.py packet runs; the purpose-reset must queue as a follow-up packet because zai-5 owns ma_observe.py right now; stale purposes must also be excluded from the fresh.work known-work list",
+        "held": 1
+       },
+       {
+        "text": "xiang_turn_check.py gives observability without a third screen (flags --hours/--agent/--list); covers §8 I11 and I12; now also the success test for zai-7/zai-1 fixes (codex-68 replies attached, no new 'commit acts from another seat' lines); I3 still only ever checked live once",
+        "held": 21
+       },
+       {
+        "text": "Cascade pane builds on per-turn 象 data (pattern_refs, rejections with reason+query, candidates with required parent, BM25 hits); prompt-retriever picks read from the seat's Claude transcript because 象 doesn't keep them — other seats show 'prompt picks not recorded'; library @why/@how prose links leave one-hop neighbourhoods sparse until converted to ids",
+        "held": 4
+       },
+       {
+        "text": "Turn finalisation is a JVM event (:turn-final at boundary/append!, :pre sync observe-only + :post background for 馬); live via proof-eval now, in http.clj requires at next restart",
+        "held": 28
+       },
+       {
+        "text": "memory-2026's per-pattern Formal notes record: 3 of 9 patterns partial in Lean, 6 none; carrier slice would give M3 its first formal spec; routing preference saved: all memory/carrier work goes to Zai runners",
+        "held": 22
+       },
+       {
+        "text": "Per-seat session reset (POST /api/alpha/agents/<seat>/reset-session) clears one seat's context with no JVM restart — recovery lever for any Zai seat refusing turns; four concurrent Zai seats acceptable when the 5-hour window is low",
+        "held": 11
+       }
+      ]
+     },
+     "fresh": {
+      "done": [
+       "✅ both zai-1 jobs (commit-attribution fix, alignment-reading packet) done"
+      ],
+      "problems": [
+       "🔴 (3:35) User reported new frames-tab flaw: the \"same mission, other agents\" line lists zai-1 as \"Zai 1 is proving T95J03 Taurus Bridge\" — completely unrelated to what zai-1 is doing on this mission, confusing; zai-5's line just reads \"(no 馬 card yet)\"",
+       "🔴 (3:36) Proposed two-part fix (🈸 awaiting user):"
+      ],
+      "work": {
+       "none": "new frames-tab stale-purpose flaw report — not on the known-work list, though the fix queues behind the running zai-5 ma_observe.py packet"
+      }
+     }
+    }
+   },
+   "evidence/session-id": "ff41903c-6510-4c5e-a293-01324d39fb45",
+   "evidence/tags": [
+    "ma-card"
+   ],
+   "evidence/at": "2026-10-19T03:38:21.908451497Z",
+   "evidence/type": "coordination",
+   "evidence/subject": {
+    "ref/type": "session",
+    "ref/id": "ff41903c-6510-4c5e-a293-01324d39fb45"
+   },
+   "evidence/author": "馬",
+   "evidence/claim-type": "observation",
+   "evidence/id": "e-e049c0d6-f1fc-48ee-bf64-fc8cc6c47509"
+  }
+ ]
+}
