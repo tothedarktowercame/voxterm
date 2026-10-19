@@ -3336,6 +3336,18 @@ class Handler(BaseHTTPRequestHandler):
             except Exception as e:
                 self._send(502, json.dumps({"ok": False, "error": str(e)}),
                            "application/json")
+        elif path == "/xiang/turns" or path.startswith("/xiang/turns/"):
+            # 象 turn records, forwarded server-side (single operator turn and
+            # the list) like diagram/dispatch — the Turn view's data.
+            try:
+                q = urlparse(self.path).query
+                with urlopen("http://127.0.0.1:7070/api/alpha/xiang/turns"
+                             + urlparse(self.path).path[len("/xiang/turns"):]
+                             + ("?" + q if q else ""), timeout=20) as r:
+                    self._send(200, r.read(), "application/json")
+            except Exception as e:
+                self._send(502, json.dumps({"ok": False, "error": str(e)}),
+                           "application/json")
         elif path == "/agency/procs":
             # The process tree under each invoked agent. The Agency JVM (the
             # process listening on :7070) runs every invoked agent as a direct

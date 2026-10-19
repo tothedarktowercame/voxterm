@@ -22,7 +22,7 @@ const assert = require('node:assert/strict');
   if(p==='/target') return route.fulfill({json:{ok:true}});
   return route.fulfill({json:{ok:true,agents:[],choices:[],text:null}});
  });
- await page.addInitScript(() => { try { localStorage.removeItem('voxterm-tab'); } catch (_) {} });
+ await page.addInitScript(() => { try { localStorage.removeItem('voxterm-tab'); localStorage.removeItem('voxterm-diagram-view'); } catch (_) {} });
  await page.goto('http://voxterm.test/');
  await page.waitForTimeout(300);
 
@@ -30,6 +30,7 @@ const assert = require('node:assert/strict');
  assert.equal(diagramRequests.length, 0);
 
  await page.locator('#tabDiagramBtn').click();
+ await page.locator('#diagViewDispatchBtn').click();  // Turn is now the default
  await page.waitForTimeout(400);
  assert.equal(diagramRequests.length >= 1, true, 'first open fetches');
  assert.equal(diagramRequests[0], '3', 'default window is 3h');

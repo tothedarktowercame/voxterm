@@ -34,6 +34,9 @@
   #diagramControls label { font-size: 12.5px; color: var(--dim); }
   #diagramHead { font-size: 12.5px; margin: 0 0 4px; }
   #diagramDetail { font-size: 12px; border: 1px solid var(--dim); border-radius: 8px; padding: 6px 8px; margin-top: 6px; color: var(--dim); }
+  #turnHead { font-size: 12.5px; margin: 0 0 4px; }
+  #turnDispatched { font-size: 12px; color: var(--dim); margin-top: 4px; }
+  .dispatch-only {}
   [data-lane] { cursor: pointer; }
   #framesNote { color: var(--dim); font-style: italic; font-size: 12.5px; padding: 8px 0; }
 
@@ -327,11 +330,20 @@
   <div id="viewDiagram" hidden>
     <div id="diagramHead"></div>
     <div id="diagramControls">
+      <button type="button" id="diagViewTurnBtn" class="sel">Turn</button>
+      <button type="button" id="diagViewDispatchBtn">Dispatch</button>
+      <button type="button" id="turnPrevBtn" title="earlier turn">‹</button>
+      <button type="button" id="turnNextBtn" title="later turn">›</button>
       <button type="button" data-hours="1">1 h</button>
       <button type="button" data-hours="3" class="sel">3 h</button>
       <button type="button" data-hours="12">12 h</button>
       <label><input type="checkbox" id="diagramHideSystem" checked> hide system lanes</label>
     </div>
+    <div id="turnHead"></div>
+    <svg id="turnSvg" xmlns="http://www.w3.org/2000/svg" role="img"
+         aria-label="one turn's string diagram"
+         style="width:100%;height:auto;border:1px solid var(--dim);border-radius:8px;touch-action:manipulation;"></svg>
+    <div id="turnDispatched"></div>
     <svg id="diagramSvg" xmlns="http://www.w3.org/2000/svg" role="img"
          aria-label="cross-agent dispatch diagram"
          style="width:100%;height:auto;border:1px solid var(--dim);border-radius:8px;touch-action:manipulation;"></svg>
@@ -716,12 +728,15 @@ function showTab(which) {
   if (diagram) {
     diagramLoaded = true;
     diagramEnsurePoll();
+    if (diagramView === 'turn') turnEnsure();
   }
   try { localStorage.setItem('voxterm-tab', which); } catch (_) {}
 }
 function updateFramesView() {
-  if (viewFrames.hidden || !framesLoaded) return;
+  if (viewFrames.hidden && viewDiagram.hidden) return;
   const agent = agentSnapshot && agentSnapshot.target && agentSnapshot.target.agent;
+  if (!viewDiagram.hidden && diagramView === 'turn') turnEnsure();
+  if (viewFrames.hidden) return;
   if (!agent) {
     framesNote.hidden = false;
     framesFrame.hidden = true;
@@ -753,7 +768,8 @@ function diagramFetch() {
   return fetch(diagramUrl(), { cache: 'no-store' })
     .then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
     .then(d => { if (d.ok === false) throw new Error(d.error || 'diagram down');
-                 diagramData = d; renderDiagram(); })
+                 diagramData = d; renderDiagram();
+                 if (diagramView === 'turn' && turnRecord) renderTurnDispatched(turnRecord); })
     .catch(err => {
       diagramHead.textContent = 'diagram unreachable: ' + err.message;
     });
@@ -774,6 +790,187 @@ $('#diagramControls').addEventListener('click', ev => {
   diagramFetch();
 });
 diagramHideSystem.addEventListener('change', renderDiagram);
+
+// --- Turn view: one operator turn as a string diagram (Elephant-2000
+// intent tracking — which operator acts got answered, and how). ---------
+const turnSvg = $('#turnSvg'), turnHead = $('#turnHead'),
+      turnDispatched = $('#turnDispatched');
+let diagramView = 'turn';            // 'turn' | 'dispatch'
+let turnList = null, turnAgent = null, turnIndex = 0, turnRecord = null;
+const turnFetchLog = [];
+function setDiagramView(v) {
+  diagramView = v;
+  $('#diagViewTurnBtn').classList.toggle('sel', v === 'turn');
+  $('#diagViewDispatchBtn').classList.toggle('sel', v === 'dispatch');
+  for (const sel of ['button[data-hours]', '#diagramHideSystem'])
+    $(sel).style.display = v === 'dispatch' ? '' : 'none';
+  $('#diagramHead').style.display = v === 'dispatch' ? '' : 'none';
+  $('#diagramSvg').style.display = v === 'dispatch' ? '' : 'none';
+  turnSvg.style.display = v === 'turn' ? '' : 'none';
+  turnHead.style.display = v === 'turn' ? '' : 'none';
+  try { localStorage.setItem('voxterm-diagram-view', v); } catch (_) {}
+  if (v === 'dispatch') diagramEnsurePoll(); else turnEnsure();
+}
+$('#diagViewTurnBtn').addEventListener('click', () => setDiagramView('turn'));
+$('#diagViewDispatchBtn').addEventListener('click', () => setDiagramView('dispatch'));
+setDiagramView(diagramView);   // normalise both views' display for the default
+try { const v = localStorage.getItem('voxterm-diagram-view');
+      if (v === 'dispatch') setDiagramView('dispatch'); } catch (_) {}
+
+function turnEnsure() {
+  if (viewDiagram.hidden) return;
+  const agent = agentSnapshot && agentSnapshot.target && agentSnapshot.target.agent;
+  if (!agent) { turnHead.textContent = 'No agent has the cursor — tap a chip in the Agents tab.'; return; }
+  if (agent !== turnAgent) {
+    turnAgent = agent; turnList = null; turnIndex = 0;
+    const url = 'xiang/turns?limit=100&agent=' + encodeURIComponent(agent);
+    turnFetchLog.push(url);
+    fetch(url, { cache: 'no-store' })
+      .then(r => r.json())
+      .then(d => { turnList = (d.turns || []);
+                   if (turnList.length) loadTurnRecord(turnList[turnIndex].id);
+                   else turnHead.textContent = 'No 象 records for ' + agent + ' yet.'; })
+      .catch(e => { turnHead.textContent = 'xiang unreachable: ' + e.message; });
+  }
+}
+function loadTurnRecord(id) {
+  const url = 'xiang/turns/' + encodeURIComponent(id);
+  turnFetchLog.push(url);
+  fetch(url, { cache: 'no-store' })
+    .then(r => r.json())
+    .then(d => { turnRecord = d.record || null; renderTurn(); })
+    .catch(e => { turnHead.textContent = 'turn fetch failed: ' + e.message; });
+}
+$('#turnPrevBtn').addEventListener('click', () => stepTurn(1));   // list is newest-first
+$('#turnNextBtn').addEventListener('click', () => stepTurn(-1));
+function stepTurn(delta) {
+  if (!turnList || !turnList.length) return;
+  const next = Math.min(turnList.length - 1, Math.max(0, turnIndex + delta));
+  if (next !== turnIndex) { turnIndex = next; loadTurnRecord(turnList[turnIndex].id); }
+}
+
+const VERDICT_STYLE = {
+  answered:   { stroke: '#eee', width: 1.6, dash: null,     end: null },
+  noted:      { stroke: '#9ab', width: 0.8, dash: null,     end: 'dot' },
+  deferred:   { stroke: '#c95', width: 1.2, dash: '4 3' },
+  declined:   { stroke: '#f55', width: 1.4, dash: null },
+  'not-answered': { stroke: '#888', width: 1.2, dash: '2 3' },
+  unread:     { stroke: '#666', width: 1,    dash: '1 3' }
+};
+function renderTurn() {
+  const rec = turnRecord;
+  if (!rec) return;
+  const turnId = rec.turn_id;
+  const opActs = (rec.acts || []).filter(a => a.author === 'operator' && a.turn === turnId);
+  const replyActs = (rec.acts || []).filter(a => a['id'].includes('-r-') && a.turn === turnId);
+  const commits = (rec.acts || []).filter(a => a['id'].includes('-c-') && a.turn === turnId);
+  const align = rec.alignment;
+  const alignBy = {}; (align && align.acts || []).forEach(x => alignBy[x.act] = x);
+  const counts = {};
+  for (const a of opActs) {
+    const v = (alignBy[a.id] || {}).verdict || 'not-answered';
+    counts[v] = (counts[v] || 0) + 1;
+  }
+  turnHead.textContent = Object.keys(counts).length
+    ? opActs.length + ' acts: ' + Object.entries(counts).map(([k, n]) => n + ' ' + k).join(', ')
+      + (align ? ' — read by ' + (align.seat || '馬') : ' — not read yet')
+    : 'no operator acts recorded';
+  // geometry: inputs on the left, boxes stacked right
+  const W = 360, inX = 118, boxX = 208, boxW = 118, rowH = 26, pad = 6;
+  const rows = Math.max(opActs.length, replyActs.length) + 1;
+  const H = pad * 2 + rows * rowH;
+  const yOf = i => pad + i * rowH + rowH / 2;
+  const boxY = {}; replyActs.forEach((b, i) => boxY[b.id] = yOf(i));
+  const loose = [];
+  let svg = '';
+  replyActs.forEach((b, i) => {
+    const y = boxY[b.id];
+    svg += `<rect class="box" data-id="${escAttr(b.id)}" x="${boxX}" y="${y - 10}" width="${boxW}" height="20" rx="6" fill="#123" stroke="#456"/>`
+         + `<text x="${boxX + 4}" y="${y + 4}" font-size="9" fill="#cde" data-id="${escAttr(b.id)}">${escXml((b.kind || '') + ' ' + firstWords(b.text))}</text>`;
+    if (['ask-action', 'propose', 'clarify'].includes(b.kind))
+      svg += `<path d="M${boxX + boxW},${y} L${W - 34},${y}" stroke="#6cf" stroke-width="1.2" fill="none"/>`
+           + `<text x="${W - 32}" y="${y + 4}" font-size="9" fill="#6cf">Joe</text>`;
+  });
+  if (commits.length && replyActs.length) {
+    const y = boxY[replyActs[replyActs.length - 1].id];
+    commits.forEach((c, i) => {
+      svg += `<path class="commit" data-id="${escAttr(c.id)}" d="M${boxX + boxW},${y - 6} L${W - 40},${y - 6 - i * 8}" stroke="#3a6" stroke-width="1" fill="none" stroke-dasharray="1 2"/>`;
+    });
+    svg += `<text x="${W - 38}" y="${y - 8 - commits.length * 8}" font-size="8" fill="#3a6">${commits.length} commit</text>`;
+  }
+  opActs.forEach((a, i) => {
+    const y = yOf(i);
+    svg += `<text x="2" y="${y + 4}" font-size="9" fill="#9ab">${escXml((a.kind || '') + ' ' + firstWords(a.text))}</text>`;
+    const al = alignBy[a.id] || { verdict: 'not-answered', method: null };
+    const v = align ? (al.verdict || 'not-answered') : 'not-answered';
+    const st = VERDICT_STYLE[v] || VERDICT_STYLE['not-answered'];
+    const target = al.by && boxY[al.by] !== undefined ? boxY[al.by] : null;
+    if (align && target !== null && v !== 'not-answered' && v !== 'unread') {
+      const mid = (y + target) / 2;
+      svg += `<path class="wire" data-act="${escAttr(a.id)}" d="M${inX},${y} C${(inX + boxX) / 2},${y} ${(inX + boxX) / 2},${target} ${boxX},${target}"`
+           + ` fill="none" stroke="${st.stroke}" stroke-width="${st.width}"${st.dash ? ` stroke-dasharray="${st.dash}"` : ''}/>`;
+      if (st.end === 'dot')
+        svg += `<circle cx="${boxX}" cy="${target}" r="2.5" fill="${st.stroke}"/>`;
+      if (al.method)
+        svg += `<text x="${(inX + boxX) / 2 - 4}" y="${mid - 3}" font-size="8" fill="#789">${al.method === 'quote' ? 'q' : 'm'}</text>`;
+    } else {
+      // unanswered / unread / no alignment yet: an open port at the right edge
+      svg += `<path class="wire loose" data-act="${escAttr(a.id)}" d="M${inX},${y} L${W - 10},${y}"`
+           + ` fill="none" stroke="${st.stroke}" stroke-width="${st.width}"${st.dash ? ` stroke-dasharray="${st.dash}"` : ''}/>`
+           + `<circle cx="${W - 10}" cy="${y}" r="2" fill="${st.stroke}"/>`;
+      loose.push(a.id);
+    }
+  });
+  turnSvg.setAttribute('viewBox', `0 0 ${W} ${H}`);
+  turnSvg.innerHTML = svg;
+  renderTurnDispatched(rec);
+}
+function firstWords(t) {
+  const s = String(t || '').replace(/\s+/g, ' ').trim();
+  return s.length > 26 ? s.slice(0, 25) + '…' : s;
+}
+function renderTurnDispatched(rec) {
+  turnDispatched.textContent = '';
+  const agent = turnAgent;
+  if (!agent || !diagramData) return;
+  const t0 = Date.parse(rec.created_at);
+  const next = turnList && turnIndex > 0 ? Date.parse(turnList[turnIndex - 1].created_at) : null;
+  const bells = (diagramData.bells || []).filter(b =>
+    b.from === agent && Date.parse(b.rung_at) >= t0
+    && (next === null || isNaN(next) || Date.parse(b.rung_at) < next));
+  if (!bells.length) return;
+  turnDispatched.textContent = 'dispatched: ' +
+    bells.map(b => b.to + ' (' + (b.state || 'open') + ')').join(', ');
+}
+turnSvg.addEventListener('click', ev => {
+  const wire = ev.target.closest('[data-act]');
+  if (wire && turnRecord) {
+    const id = wire.dataset.act;
+    const a = (turnRecord.acts || []).find(x => x.id === id);
+    const al = turnRecord.alignment &&
+               turnRecord.alignment.acts.find(x => x.act === id);
+    diagramDetail.hidden = false;
+    diagramDetail.style.whiteSpace = 'pre-line';
+    diagramDetail.textContent =
+      (a ? a.kind + ': ' + String(a.text || '').slice(0, 300) : id)
+      + (al ? '\n' + al.verdict + (al.by ? ' by ' + al.by : '')
+            + (al.method ? ' · ' + al.method : '')
+            + (al.quote ? '\n“' + String(al.quote).slice(0, 120) + '”' : '')
+        : '\nnot read yet');
+    return;
+  }
+  const box = ev.target.closest('rect.box, rect.box ~ text[data-id], text[data-id]');
+  if (box && turnRecord) {
+    const id = box.dataset.id;
+    const b = (turnRecord.acts || []).find(x => x.id === id);
+    if (b) {
+      diagramDetail.hidden = false;
+      diagramDetail.style.whiteSpace = 'pre-line';
+      diagramDetail.textContent = b.kind + ': '
+        + String(b.text || '').split('\n').slice(0, 4).join('\n');
+    }
+  }
+});
 
 const DIAGRAM_COLORS = { operator: '#6cf', bell: '#eee', system: '#999' };
 function renderDiagram() {
