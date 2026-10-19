@@ -8,7 +8,7 @@ const assert = require('node:assert/strict');
  const browser = await chromium.launch({headless:true, ...(process.env.CHROMIUM_PATH ? {executablePath:process.env.CHROMIUM_PATH} : {})});
  const page = await browser.newPage({viewport:{width:390,height:844}});
  const sample = JSON.parse(fs.readFileSync(
-   process.env.DIAGRAM_SAMPLE || '/home/joe/notes/packets/ma-sonnet/dispatch-sample-1h.json','utf8'));
+   process.env.DIAGRAM_SAMPLE || require('node:path').join(__dirname, 'fixtures', 'diagram-dispatch-1h.json'),'utf8'));
  const diagramRequests = [];
  await page.route('**/*', async route => {
   const u = new URL(route.request().url());
