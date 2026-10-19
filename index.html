@@ -22,6 +22,13 @@
   h1 { margin: 0; font-size: 17px; letter-spacing: .02em; }
   .sub { color: var(--dim); font-size: 12.5px; margin-top: 2px; }
   main { padding: 8px 16px 28px; max-width: 760px; margin: 0 auto; }
+  #tabs { display: flex; gap: 8px; margin: 0 0 10px; }
+  #tabs .tab {
+    flex: 1; min-height: 44px; font-size: 16px; border-radius: 10px;
+    border: 1px solid var(--dim); background: transparent; color: inherit;
+  }
+  #tabs .tab.active { background: rgba(127,127,127,.25); border-color: inherit; font-weight: bold; }
+  #framesNote { color: var(--dim); font-style: italic; font-size: 12.5px; padding: 8px 0; }
 
   /* --- mode switch --- */
   #rocket {
@@ -210,6 +217,11 @@
 </header>
 
 <main>
+  <nav id="tabs" aria-label="views">
+    <button type="button" id="tabAgentsBtn" class="tab active">Agents</button>
+    <button type="button" id="tabFramesBtn" class="tab">Frames</button>
+  </nav>
+  <div id="viewAgents">
   <div id="agents"></div>
   <div id="procs"></div>
   <div id="apm"></div>
@@ -303,6 +315,12 @@
 
   <h2>Segments</h2>
   <div id="log"></div>
+  </div><!-- /viewAgents -->
+  <div id="viewFrames" hidden>
+    <div id="framesNote" hidden>No agent has the cursor — tap a chip in the Agents tab first.</div>
+    <iframe id="framesFrame" title="active frames" hidden
+            style="width:100%;height:calc(100vh - 130px);border:0;"></iframe>
+  </div>
 </main>
 
 <script src="process_cues.js"></script>
@@ -313,6 +331,8 @@ const rocket = $('#rocket'), rLabel = $('#rocketLabel'), listen = $('#listen');
 const meter = $('#meter'), meterWrap = $('#meterWrap'), threshEl = $('#thresh'), meterLabel = $('#meterLabel');
 const pending = $('#pending'), statusEl = $('#status'), out = $('#out'), log = $('#log');
 const agents = $('#agents'), newKinds = $('#newKinds');
+
+
 let pendingRaw = ''; // Keep literal escapes and split phrases intact until dispatch.
 let pendingChunks = []; // the separate transcripts pendingRaw was joined from
 
@@ -645,6 +665,52 @@ function fmtQuiet(sec) {
 // Keep the two existing polls independent. A seat alone is not work; only
 // attributed child processes keep a chip visible between activity events.
 let agentSnapshot = {agents: [], target: null};
+
+// Two views of the same stream: Agents (the chips and everything below) and
+// Frames (the 象 stepper for whichever agent has the cursor, from the same
+// agency/active poll's `target`). The iframe is created lazily on first
+// opening Frames, and is only ever re-pointed when the target CHANGES — the
+// stepper streams its own updates, so a reload would lose the reader's place.
+const tabAgentsBtn = $('#tabAgentsBtn'), tabFramesBtn = $('#tabFramesBtn');
+const viewAgents = $('#viewAgents'), viewFrames = $('#viewFrames');
+const framesNote = $('#framesNote'), framesFrame = $('#framesFrame');
+let framesLoaded = false;
+function framesSrcFor(agent) {
+  return '/wip/stepper/?agent=' + encodeURIComponent(agent);
+}
+function showTab(which) {
+  const frames = which === 'frames';
+  viewAgents.hidden = frames;
+  viewFrames.hidden = !frames;
+  tabAgentsBtn.classList.toggle('active', !frames);
+  tabFramesBtn.classList.toggle('active', frames);
+  if (frames) {
+    framesLoaded = true;
+    updateFramesView();
+  }
+  try { localStorage.setItem('voxterm-tab', which); } catch (_) {}
+}
+function updateFramesView() {
+  if (viewFrames.hidden || !framesLoaded) return;
+  const agent = agentSnapshot && agentSnapshot.target && agentSnapshot.target.agent;
+  if (!agent) {
+    framesNote.hidden = false;
+    framesFrame.hidden = true;
+    return;
+  }
+  framesNote.hidden = true;
+  framesFrame.hidden = false;
+  const want = framesSrcFor(agent);
+  // Only touch src when the target actually changed; same agent ⇒ no reload.
+  if (framesFrame.getAttribute('src') !== want) framesFrame.setAttribute('src', want);
+}
+tabAgentsBtn.addEventListener('click', () => showTab('agents'));
+tabFramesBtn.addEventListener('click', () => showTab('frames'));
+(function restoreTab() {
+  let saved = null;
+  try { saved = localStorage.getItem('voxterm-tab'); } catch (_) {}
+  if (saved === 'frames') showTab('frames');
+})();
 let processSnapshot = null;
 function renderAgentSnapshots() {
   const rows = new Map((agentSnapshot.agents || []).map(row => [row.id, {...row}]));
@@ -740,6 +806,7 @@ function refreshAgents() {
       agentSnapshot = data.__err
         ? {agents: [{id: 'agency: ' + data.__err, status: ''}]} : data;
       renderAgentSnapshots();
+      updateFramesView();
     });
 }
 refreshAgents();
