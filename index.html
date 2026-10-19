@@ -36,7 +36,7 @@
   #diagramDetail { font-size: 12px; border: 1px solid var(--dim); border-radius: 8px; padding: 6px 8px; margin-top: 6px; color: var(--dim); }
   #turnHead { font-size: 12.5px; margin: 0 0 4px; }
   #turnDispatched { font-size: 12px; color: var(--dim); margin-top: 4px; }
-  #cascadeHead { font-size: 12.5px; margin: 0 0 4px; color: var(--dim); }
+  #cascadeHead { font-size: 12.5px; margin: 10px 0 4px; color: var(--dim); }
   .dispatch-only {}
   [data-lane] { cursor: pointer; }
   #framesNote { color: var(--dim); font-style: italic; font-size: 12.5px; padding: 8px 0; }
@@ -333,7 +333,6 @@
     <div id="diagramControls">
       <button type="button" id="diagViewTurnBtn" class="sel">Turn</button>
       <button type="button" id="diagViewDispatchBtn">Dispatch</button>
-      <button type="button" id="diagViewCascadeBtn">Cascade</button>
       <button type="button" id="turnPrevBtn" title="earlier turn">‹</button>
       <button type="button" id="turnNextBtn" title="later turn">›</button>
       <button type="button" data-hours="1">1 h</button>
@@ -801,7 +800,7 @@ diagramHideSystem.addEventListener('change', renderDiagram);
 // intent tracking — which operator acts got answered, and how). ---------
 const turnSvg = $('#turnSvg'), turnHead = $('#turnHead'),
       turnDispatched = $('#turnDispatched');
-let diagramView = 'turn';            // 'turn' | 'dispatch' | 'cascade'
+let diagramView = 'turn';            // 'turn' | 'dispatch'
 const cascadeSvg = $('#cascadeSvg'), cascadeHead = $('#cascadeHead');
 let cascadeData = null, cascadeFocus = null;   // focus: a fragment key, 's1-0'
 const cascadeFetchLog = [];
@@ -818,21 +817,20 @@ function setDiagramView(v) {
   $('#diagramHead').style.display = v === 'dispatch' ? '' : 'none';
   $('#diagramSvg').style.display = v === 'dispatch' ? '' : 'none';
   turnSvg.style.display = v === 'turn' ? '' : 'none';
-  turnHead.style.display = v === 'dispatch' ? 'none' : '';   // Cascade shows it too
+  turnHead.style.display = v === 'turn' ? '' : 'none';
   turnDispatched.style.display = v === 'turn' ? '' : 'none';
-  $('#diagViewCascadeBtn').classList.toggle('sel', v === 'cascade');
-  cascadeSvg.style.display = v === 'cascade' ? '' : 'none';
-  cascadeHead.style.display = v === 'cascade' ? '' : 'none';
+  // the cascade is a pane under the turn (Joe, 2026-10-19), not a view of its own
+  cascadeSvg.style.display = v === 'turn' ? '' : 'none';
+  cascadeHead.style.display = v === 'turn' ? '' : 'none';
   try { localStorage.setItem('voxterm-diagram-view', v); } catch (_) {}
   if (v === 'dispatch') diagramEnsurePoll();
-  else { turnEnsure(); if (v === 'cascade') cascadeEnsure(); }
+  else { turnEnsure(); cascadeEnsure(); }
 }
 $('#diagViewTurnBtn').addEventListener('click', () => setDiagramView('turn'));
 $('#diagViewDispatchBtn').addEventListener('click', () => setDiagramView('dispatch'));
-$('#diagViewCascadeBtn').addEventListener('click', () => setDiagramView('cascade'));
 setDiagramView(diagramView);   // normalise both views' display for the default
 try { const v = localStorage.getItem('voxterm-diagram-view');
-      if (v === 'dispatch' || v === 'cascade') setDiagramView(v); } catch (_) {}
+      if (v === 'dispatch') setDiagramView(v); } catch (_) {}
 
 function turnEnsure() {
   if (viewDiagram.hidden) return;
@@ -1064,6 +1062,7 @@ turnSvg.addEventListener('click', ev => {
     const rid = turnList && turnList[turnIndex] && turnList[turnIndex].id;
     cascadePick = { record: rid, key: fragKeyOfAct(id) };
     const lit = cascadeShownId === rid ? cascadeNodesFor(cascadePick.key) : [];
+    if (cascadeShownId === rid) { cascadeFocus = cascadePick.key; renderCascade(); }
     const al = turnRecord.alignment &&
                turnRecord.alignment.acts.find(x => x.act === id);
     diagramDetail.hidden = false;
@@ -1075,8 +1074,8 @@ turnSvg.addEventListener('click', ev => {
             + (al.quote ? '\n“' + String(al.quote).slice(0, 120) + '”' : '')
         : '\nnot read yet')
       + (lit.length ? '\npatterns: ' + lit.map(n => n.kind + ' ' + n.id).join(', ')
-                    + ' — lit in Cascade'
-        : cascadeShownId === rid ? '\nno patterns for this act' : '\nCascade will light this act\'s patterns');
+                    + ' — lit below'
+        : cascadeShownId === rid ? '\nno patterns for this act' : '\nthe patterns below will light when they load');
     return;
   }
   const box = ev.target.closest('rect.box, rect.box ~ text[data-id], text[data-id]');
@@ -1092,7 +1091,7 @@ turnSvg.addEventListener('click', ev => {
   }
 });
 
-// --- Cascade view: the patterns one turn touched (GET xiang/cascade/ID,
+// --- Cascade pane, under the Turn view: the patterns one turn touched (GET xiang/cascade/ID,
 // read by server.py from the record's sidecar files). Top to bottom: what
 // the prompt retriever put in front of the seat, what 象 cited and rejected,
 // the library parents, what it proposed under them, and the patterns one step
@@ -1116,7 +1115,7 @@ const CASCADE_STYLE = {
 };
 let cascadeShownId = null;
 function cascadeEnsure() {
-  if (diagramView !== 'cascade' || !turnRecord) return;
+  if (diagramView !== 'turn' || !turnRecord) return;
   const id = turnList && turnList[turnIndex] && turnList[turnIndex].id;
   if (!id) return;
   const url = 'xiang/cascade/' + encodeURIComponent(id);
@@ -1146,11 +1145,11 @@ function renderCascade() {
   const byKind = {}; (d.nodes || []).forEach(n => (byKind[n.kind] = byKind[n.kind] || []).push(n));
   const n = k => (byKind[k] || []).length;
   const focus = cascadeFocus && frags[cascadeFocus] ? cascadeFocus : null;
-  cascadeHead.textContent = d.analysis === 'absent' ? 'not read yet — no patterns judged'
+  cascadeHead.textContent = 'Patterns: ' + (d.analysis === 'absent' ? 'not read yet — none judged'
     : [n('cited') + ' cited', n('rejected') + ' considered', n('proposed') + ' proposed',
        d.prompt_source === 'transcript' ? n('noticed') + ' in the prompt' : 'prompt picks ' + d.prompt_source]
       .join(' · ')
-      + (d.unjudged_hits ? ' · ' + d.unjudged_hits + ' other hits not judged' : '')
+      + (d.unjudged_hits ? ' · ' + d.unjudged_hits + ' other hits not judged' : ''))
       + (focus ? '\nlit: ' + markOfFrag(focus) + ' ' + firstWords(frags[focus].text, 48) + ' (tap here to clear)' : '');
   cascadeHead.style.whiteSpace = 'pre-line';
   const W = 360, gx = 40, boxW = W - gx - 4, boxH = 28, gap = 6, headH = 14, pad = 6;

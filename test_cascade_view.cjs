@@ -1,5 +1,5 @@
-// Diagram tab, Cascade view: the patterns one turn touched, and the link from
-// a Turn-view act to its patterns. Record from the xiang-turn-aligned fixture;
+// Diagram tab, Turn view's cascade pane: the patterns one turn touched, and
+// the link from an act in the turn diagram to its patterns. Record from the xiang-turn-aligned fixture;
 // the cascade payload is the shape xiang_cascade.cascade() returns.
 const {chromium} = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
 const fs = require('node:fs');
@@ -63,16 +63,18 @@ const cascade = {ok:true, id:'turn-DHzkds', turn_id:'claude-3-turn-54', analysis
  await page.goto('http://voxterm.test/');
  await page.locator('#tabDiagramBtn').click();
  await page.waitForTimeout(300);
- assert.equal(cascadeRequests.length, 0, 'Turn view does not fetch the cascade');
 
- // (a) the Cascade button swaps the views and fetches the shown turn's cascade
- await page.locator('#diagViewCascadeBtn').click();
- await page.waitForTimeout(300);
+ // (a) the Turn view shows the turn and, under it, the shown turn's cascade
+ assert.equal(await page.locator('#diagViewCascadeBtn').count(), 0, 'no separate Cascade view');
+ assert.equal(await page.locator('#turnSvg').isVisible(), true);
  assert.equal(await page.locator('#cascadeSvg').isVisible(), true);
- assert.equal(await page.locator('#turnSvg').evaluate(el => getComputedStyle(el).display), 'none');
+ const below = await page.evaluate(() =>
+   document.querySelector('#cascadeHead').getBoundingClientRect().top
+   >= document.querySelector('#turnSvg').getBoundingClientRect().bottom);
+ assert.ok(below, 'the cascade pane sits under the turn diagram');
  assert.deepEqual(cascadeRequests, ['turn-DHzkds']);
  assert.equal(await page.locator('#cascadeHead').innerText(),
-   '2 cited · 1 considered · 1 proposed · 1 in the prompt · 5 other hits not judged');
+   'Patterns: 2 cited · 1 considered · 1 proposed · 1 in the prompt · 5 other hits not judged');
 
  // (b) one box per node, sections top to bottom in reading order
  const kinds = await page.locator('#cascadeSvg .cnode').evaluateAll(els => els.map(e => e.dataset.kind));
@@ -105,15 +107,11 @@ const cascade = {ok:true, id:'turn-DHzkds', turn_id:'claude-3-turn-54', analysis
  assert.match(detail, /about planning, not doing/);
  assert.match(detail, /query: load it again/);
 
- // (e) tapping an act in the Turn view lights that act's patterns here
- await page.locator('#diagViewTurnBtn').click();
- await page.waitForTimeout(200);
+ // (e) tapping an act in the turn diagram lights that act's patterns below it
  await page.locator('#turnSvg .wire[data-act="claude-3-turn-54-f-s1-1"]').first()
    .evaluate(el => el.dispatchEvent(new MouseEvent('click', {bubbles:true})));
  assert.match(await page.locator('#diagramDetail').innerText(),
-   /patterns: cited a\/cited, proposed op\/new — lit in Cascade/);
- await page.locator('#diagViewCascadeBtn').click();
- await page.waitForTimeout(300);
+   /patterns: cited a\/cited, proposed op\/new — lit below/);
  const op = await page.locator('#cascadeSvg .cnode').evaluateAll(els =>
    Object.fromEntries(els.map(e => [e.dataset.id, e.getAttribute('opacity')])));
  assert.deepEqual(op, {'a/noticed':'0.3','a/cited':'1','a/first':'0.3','a/rejected':'0.3',
@@ -127,8 +125,14 @@ const cascade = {ok:true, id:'turn-DHzkds', turn_id:'claude-3-turn-54', analysis
  await page.locator('#turnPrevBtn').click();
  await page.waitForTimeout(300);
  assert.equal(cascadeRequests[cascadeRequests.length - 1], 'older');
- assert.equal(await page.locator('#cascadeHead').innerText(), 'not read yet — no patterns judged');
+ assert.equal(await page.locator('#cascadeHead').innerText(), 'Patterns: not read yet — none judged');
  assert.equal(await page.locator('#cascadeSvg .cnode').count(), 0);
+
+ // (g) the Dispatch view hides the pane
+ await page.locator('#diagViewDispatchBtn').click();
+ await page.waitForTimeout(200);
+ assert.equal(await page.locator('#cascadeSvg').isVisible(), false);
+ assert.equal(await page.locator('#cascadeHead').isVisible(), false);
 
  assert.deepEqual(errors, []);
  await browser.close();
