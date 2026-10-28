@@ -3548,7 +3548,7 @@ class Handler(BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
         if parsed.path not in ("/transcribe", "/route", "/speak", "/say",
                                "/commentate", "/preview", "/target",
-                               "/agency/new"):
+                               "/speech", "/agency/new"):
             self._send(404, "not found", "text/plain")
             return
 
