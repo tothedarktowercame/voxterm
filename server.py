@@ -1358,6 +1358,43 @@ def _jvm_service(args):
     return None
 
 
+# MCP servers Claude Code starts for every seat from ~/.claude.json
+# `mcpServers`. Each lives as long as its seat, so between turns it is always
+# there; read as a child of the seat it made every idle warm seat look like it
+# had work carried over from an earlier turn (green outline, Joe 2026-10-28:
+# claude-15 "outlined in green" with its REPL waiting for input). Five seats
+# showed it from 2026-10-15, when the minus40 MCP server was added. They are
+# part of the seat, not work, so the seat's tree leaves them out.
+_MCP_CONFIG = os.path.expanduser("~/.claude.json")
+_mcp_cache = {"mtime": None, "needles": ()}
+
+
+def _mcp_needles():
+    """Command lines of the configured MCP servers, re-read when the file changes."""
+    try:
+        mtime = os.path.getmtime(_MCP_CONFIG)
+    except OSError:
+        return ()
+    if mtime != _mcp_cache["mtime"]:
+        needles = []
+        try:
+            with open(_MCP_CONFIG) as fh:
+                servers = json.load(fh).get("mcpServers") or {}
+            for spec in servers.values():
+                line = " ".join([str(spec.get("command") or "")]
+                                + [str(a) for a in spec.get("args") or []]).strip()
+                if line:
+                    needles.append(line)
+        except (OSError, ValueError, AttributeError):
+            pass
+        _mcp_cache.update(mtime=mtime, needles=tuple(needles))
+    return _mcp_cache["needles"]
+
+
+def _seat_mcp_server(args):
+    return any(needle in args for needle in _mcp_needles())
+
+
 def ma_card_work(entries, turn):
     """The 馬 card body for one turn: entries whose body turn-evidence-id
     equals TURN, latest body "at" first; None when 馬 has not read it."""
@@ -1387,7 +1424,8 @@ def agency_procs():
         procs[pid] = {"pid": pid, "ppid": ppid, "elapsed": et, "cpu": cpu,
                       "comm": comm, "cmd": _short_cmd(comm, args),
                       "start": now - et, "session": _session_in(args),
-                      "service": _jvm_service(args)}
+                      "service": _jvm_service(args),
+                      "mcp": _seat_mcp_server(args)}
         kids.setdefault(ppid, []).append(pid)
 
     def cwd_of(pid):
@@ -1401,11 +1439,14 @@ def agency_procs():
         node["cwd"] = cwd_of(pid)
         node.pop("start", None)
         node.pop("session", None)
+        node.pop("mcp", None)
         if not node.get("service"):
             node.pop("service", None)
         node["children"] = []
         if depth < 5:
             for k in sorted(kids.get(pid, []), key=lambda k: -procs[k]["elapsed"]):
+                if procs[k].get("mcp"):
+                    continue
                 if budget[0] <= 0:
                     break
                 budget[0] -= 1
