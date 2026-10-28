@@ -567,6 +567,11 @@ async function instantReply(text) {
 // the REPL, so a failed poll is simply a quiet turn.
 async function drainSay() {
   if (!$('#speakagent').checked || speaking || speakBusy || !ctx) return;
+  // Each queued reply goes to whichever page asks first. With two pages open
+  // (2026-10-28: one visible with the mic live, one hidden and silent, both
+  // polling) a hidden page could take the Gist and play it where nobody is
+  // listening. Only a page the user can see drains the queue.
+  if (document.visibilityState !== 'visible') return;
   try {
     const res = await fetch('say/next');
     if (!res.ok) return;
