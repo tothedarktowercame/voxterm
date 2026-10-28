@@ -298,6 +298,7 @@
     <label><input type="checkbox" id="submit" checked> press RET (emacs)</label>
     <label><input type="checkbox" id="instant"> instant reply (Opus)</label>
     <label><input type="checkbox" id="speakagent" checked> speak agent replies</label>
+    <label title="Emacs side: speak only the Gist (Gist: line or ㊥ paragraph) of the agent whose buffer has the cursor when its reply starts"><input type="checkbox" id="voiceconv"> voice conversation: hear the Gist of the agent at my cursor</label>
     <label><input type="checkbox" id="speakback"> echo transcript (debug)</label>
     <label><input type="checkbox" id="gatemic"> mute mic while speaking (speaker, not headphones)</label>
   </div>
@@ -1345,6 +1346,32 @@ diagramSvg.addEventListener('click', ev => {
   try { saved = localStorage.getItem('voxterm-tab'); } catch (_) {}
   if (saved === 'frames' || saved === 'diagram') showTab(saved);
 })();
+// Voice conversation lives in Emacs (voxterm-voice-conversation): it decides
+// whether a reply is queued for speech at all. "speak agent replies" above only
+// gates playback here, so with the Emacs side off nothing was ever queued.
+async function syncVoiceConversation(on) {
+  const box = $('#voiceconv');
+  try {
+    const res = await fetch('speech', on === undefined ? {} : {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({on})});
+    const r = await res.json();
+    if (!r.ok) { if (on !== undefined) setStatus('voice conversation: ' + r.reason); }
+    if (typeof r.conversation === 'boolean') box.checked = r.conversation;
+    if (r.ok && on !== undefined) {
+      if (on) $('#speakagent').checked = true;
+      setStatus(on ? 'voice conversation on' + (r.target ? ' — ' + r.target : '')
+                   : 'voice conversation off');
+    }
+  } catch (err) {
+    if (on !== undefined) setStatus('voice conversation failed: ' + err.message);
+  }
+}
+$('#voiceconv').addEventListener('change', e => syncVoiceConversation(e.target.checked));
+syncVoiceConversation();
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible') syncVoiceConversation();
+});
 let processSnapshot = null;
 function renderAgentSnapshots() {
   const rows = new Map((agentSnapshot.agents || []).map(row => [row.id, {...row}]));

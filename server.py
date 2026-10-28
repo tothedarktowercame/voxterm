@@ -1028,6 +1028,43 @@ def note_target(agent):
         _recent_targets.popitem(last=False)
 
 
+def speech_state(on=None):
+    """What Emacs speaks; with ON a bool, switch the voice conversation first.
+
+    The page's "speak agent replies" box only gates playback here; whether a
+    reply is queued for speech at all is decided in Emacs (voxterm.el), and
+    that side was off unless someone ran M-x voxterm-toggle-speaking in the
+    current Emacs (Joe, 2026-10-28: speak-aloud "doesn't universally work").
+    The voice-conversation toggle switches the Emacs side: speak only the
+    Gist of the agent at the cursor (`voxterm-voice-conversation')."""
+    if SINK != "emacs":
+        return {"ok": False, "reason": "speech is decided in Emacs; sink is %s" % SINK}
+    call = ("(voxterm-speech-state)" if on is None else
+            "(voxterm-voice-conversation %s)" % ("t" if on else "nil"))
+    # The fboundp check names the newest command, so an Emacs still holding an
+    # older voxterm.el loads this one instead of failing.
+    expr = ('(progn (unless (fboundp (quote voxterm-voice-conversation)) (load %s t t))'
+            ' (let ((s %s)) (format "%%s|%%s|%%s" (if (plist-get s :conversation) "on" "off")'
+            ' (if (plist-get s :speaking) "speaking" "silent") (or (plist-get s :target) ""))))'
+            % (elisp_string(ELISP), call))
+    try:
+        p = subprocess.run(["emacsclient", "-s", EMACS_SOCKET, "-e", expr],
+                           capture_output=True, text=True, timeout=3)
+    except Exception as e:
+        return {"ok": False, "reason": "Emacs speech request failed: %s" % e}
+    if p.returncode != 0:
+        return {"ok": False,
+                "reason": (p.stderr or p.stdout or "Emacs rejected the request")[-300:].strip()}
+    conv, _, rest = p.stdout.strip().strip('"').partition("|")
+    speaking, _, target = rest.partition("|")
+    result = {"ok": True, "conversation": conv == "on",
+              "speaking": speaking == "speaking", "target": target or None}
+    if on is not None and result["conversation"] != bool(on):
+        return {"ok": False, "reason": "Emacs did not confirm the voice conversation",
+                **result}
+    return result
+
+
 def current_target():
     """The agent whose buffer a dictation would land in right now, or None.
 
@@ -3428,6 +3465,8 @@ class Handler(BaseHTTPRequestHandler):
             except Exception as e:
                 self._send(502, json.dumps({"ok": False, "error": str(e)}),
                            "application/json")
+        elif path == "/speech":
+            self._send(200, json.dumps(speech_state()), "application/json")
         elif path == "/agency/procs":
             # The process tree under each invoked agent. The Agency JVM (the
             # process listening on :7070) runs every invoked agent as a direct
@@ -3538,6 +3577,18 @@ class Handler(BaseHTTPRequestHandler):
 
         body = self.rfile.read(length)
         q = parse_qs(parsed.query)
+
+        if parsed.path == "/speech":
+            try:
+                payload = json.loads(body.decode("utf-8"))
+                if not isinstance(payload, dict) or not isinstance(payload.get("on"), bool):
+                    result = {"ok": False, "reason": "JSON object needs on: true|false"}
+                else:
+                    result = speech_state(payload["on"])
+            except Exception as e:
+                result = {"ok": False, "reason": "invalid request: %s" % e}
+            self._send(200, json.dumps(result), "application/json")
+            return
 
         if parsed.path == "/target":
             try:

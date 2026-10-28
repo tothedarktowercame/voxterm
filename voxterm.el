@@ -175,7 +175,7 @@ user who is not typing leaves the focus guess to whichever tty frame last
 reported focus (2026-09-27: dictation for claude-17 landed in claude-1's
 REPL, unsent).  Since 2026-09-28 it is consulted only when the cursor's window
 cannot take text; see `voxterm--target-window'."
-  (when-let ((buf (and voxterm-speak-only-buffer
+  (when-let ((buf (and (stringp voxterm-speak-only-buffer)
                        (get-buffer voxterm-speak-only-buffer))))
     (voxterm--live-buffer-window buf)))
 
@@ -447,8 +447,14 @@ Toggle with \\[voxterm-toggle-speaking].")
   "When a string, speak streamed replies only in the buffer of that name.
 nil speaks every agent buffer that streams, which in a busy daemon means
 every seat's replies at once.  Set it to one conversation, e.g.
-\"*claude-repl:claude-17*\", to talk with that agent alone."
-  :type '(choice (const :tag "Every buffer" nil) string) :group 'voxterm)
+\"*claude-repl:claude-17*\", to talk with that agent alone.  The symbol
+`cursor' speaks the buffer that is voxterm's target (where the cursor is,
+or the pinned buffer) when the reply starts streaming; see
+`voxterm-voice-conversation'."
+  :type '(choice (const :tag "Every buffer" nil)
+                 (const :tag "The buffer at the cursor" cursor)
+                 string)
+  :group 'voxterm)
 
 (defcustom voxterm-gist-only nil
   "When non-nil, speak only a turn's Gist line, wherever it appears.
@@ -460,10 +466,22 @@ In gist-only mode narration and tool lines are never spoken; the first
 complete Gist line in the turn is, and a turn without one stays silent."
   :type 'boolean :group 'voxterm)
 
+(defvar-local voxterm--stream-here 'unset
+  "Whether this turn is spoken, decided at its first streamed text.
+In `cursor' mode the answer must not change when the cursor moves away
+while the agent is still working: the turn belongs to the buffer that was
+the target when it started.")
+
 (defun voxterm--speak-here-p ()
   "Non-nil when the current buffer's replies should be spoken."
-  (or (null voxterm-speak-only-buffer)
-      (equal (buffer-name) voxterm-speak-only-buffer)))
+  (cond
+   ((null voxterm-speak-only-buffer) t)
+   ((eq voxterm-speak-only-buffer 'cursor)
+    (when (eq voxterm--stream-here 'unset)
+      (setq voxterm--stream-here
+            (equal (buffer-name) (ignore-errors (voxterm-target-name)))))
+    voxterm--stream-here)
+   (t (equal (buffer-name) voxterm-speak-only-buffer))))
 
 (defvar-local voxterm--stream-acc ""
   "Text streamed so far in the current turn, until a paragraph is sent.")
@@ -504,6 +522,13 @@ whatever has accumulated."
   "Never speak more than this many paragraphs, however short they are."
   :type 'integer :group 'voxterm)
 
+(defconst voxterm--mark-gist-re
+  "^[ \t]*㊥[ \t]*\\(?:([^)\n]*)[ \t]*\\)?\\(\\(?:.\\|\n[ \t]*[^ \t\n]\\)+?\\)[ \t]*\n[ \t]*\n"
+  "A Gist paragraph in the reply proforma of futon3c/CLAUDE.md (2026-09-30):
+it opens with ㊥ and an optional bracketed target, e.g. ㊥ (\"what Joe
+said\") text.  The paragraph is spoken without the mark or the bracket.  It
+is complete only when a blank line closes it.")
+
 (defconst voxterm--gist-re "^[ \t]*Gist:[ \t]*\\(.+?\\)[ \t]*\n"
   "A turn's spoken opening line, per the Gist convention in futon3c/CLAUDE.md.
 When an agent follows it there is nothing to infer: this line is the spoken
@@ -515,9 +540,11 @@ anchor only at the very end of the pattern — elsewhere it is a literal
 dollar sign, so `[ \\t]*$\\n' silently matches nothing.")
 
 (defun voxterm--gist (acc)
-  "The Gist line from ACC once it is complete, else nil."
-  (when (string-match voxterm--gist-re acc)
-    (match-string 1 acc)))
+  "The Gist line, or ㊥ Gist paragraph, from ACC once it is complete, else nil."
+  (cond
+   ((string-match voxterm--gist-re acc) (match-string 1 acc))
+   ((string-match voxterm--mark-gist-re acc)
+    (replace-regexp-in-string "[ \t]*\n[ \t]*" " " (match-string 1 acc)))))
 
 (defun voxterm--collect (acc force)
   "Text to speak from ACC, or nil to keep waiting.
@@ -615,12 +642,13 @@ shape.  Every line is \"[Name] preview\", per
   "Flush whatever is left, then reset for the next turn."
   (when (and voxterm-speak-stream (voxterm--speak-here-p))
     (if voxterm-gist-only
-        ;; A Gist that is the stream's very last line has no newline yet.
+        ;; A Gist that is the stream's very last line, or a ㊥ paragraph
+        ;; that is its last paragraph, has no closing blank line yet.
         (unless voxterm--stream-sent
-          (voxterm--send-gist (concat voxterm--stream-acc "\n")))
+          (voxterm--send-gist (concat voxterm--stream-acc "\n\n")))
       (voxterm--flush t)))
   (setq voxterm--stream-acc "" voxterm--stream-sent nil
-        voxterm--stream-start nil))
+        voxterm--stream-start nil voxterm--stream-here 'unset))
 
 ;;;###autoload
 (defun voxterm-context (&optional chars)
@@ -654,6 +682,32 @@ properties are dropped; the caller only wants the words."
     (advice-remove 'agent-chat-stream-text #'voxterm--stream-advice)
     (advice-remove 'agent-chat-end-streaming-message #'voxterm--stream-end-advice)
     (message "voxterm: silent")))
+
+;;;###autoload
+(defun voxterm-voice-conversation (&optional on)
+  "Talk with the agent at the cursor: speak only the Gist of its replies.
+With ON non-nil (interactively, toggle), switch speech on, speak only the
+buffer that is voxterm's target when a reply starts, and only its Gist
+(`Gist:' line or ㊥ paragraph).  With ON nil, switch speech off.  This is
+what the voxterm page's \"voice conversation\" toggle calls.  Returns
+`voxterm-speech-state'."
+  (interactive (list (not (and voxterm-speak-stream
+                               (eq voxterm-speak-only-buffer 'cursor)))))
+  (if on
+      (setq voxterm-speak-only-buffer 'cursor voxterm-gist-only t)
+    (setq voxterm-speak-only-buffer nil voxterm-gist-only nil))
+  (unless (eq (and voxterm-speak-stream t) (and on t))
+    (voxterm-toggle-speaking))
+  (voxterm-speech-state))
+
+(defun voxterm-speech-state ()
+  "Plist describing what voxterm speaks, for the page's toggle."
+  (list :speaking (and voxterm-speak-stream t)
+        :conversation (and voxterm-speak-stream
+                           (eq voxterm-speak-only-buffer 'cursor) t)
+        :only (and (stringp voxterm-speak-only-buffer) voxterm-speak-only-buffer)
+        :gist-only (and voxterm-gist-only t)
+        :target (ignore-errors (voxterm-target-name))))
 
 (provide 'voxterm)
 ;;; voxterm.el ends here
