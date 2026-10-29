@@ -463,7 +463,9 @@ soon as it is ready, which is right for a turn-start signal.  An agent that
 works first and writes its Gist after its tool calls (2026-09-27: talking
 through decisions) had its narration spoken instead, and the Gist never.
 In gist-only mode narration and tool lines are never spoken; the first
-complete Gist line in the turn is, and a turn without one stays silent."
+complete Gist line in the turn is.  A turn that ends without one has its
+opening paragraphs spoken instead, as in the default mode, but only at the
+end, since until then a Gist may still arrive."
   :type 'boolean :group 'voxterm)
 
 (defvar-local voxterm--stream-here 'unset
@@ -644,8 +646,11 @@ shape.  Every line is \"[Name] preview\", per
     (if voxterm-gist-only
         ;; A Gist that is the stream's very last line, or a ㊥ paragraph
         ;; that is its last paragraph, has no closing blank line yet.
+        ;; A turn with no Gist at all falls back to its opening paragraphs
+        ;; (Joe, 2026-10-29); `voxterm--flush' still prefers a Gist.
         (unless voxterm--stream-sent
-          (voxterm--send-gist (concat voxterm--stream-acc "\n\n")))
+          (setq voxterm--stream-acc (concat voxterm--stream-acc "\n\n"))
+          (voxterm--flush t))
       (voxterm--flush t)))
   (setq voxterm--stream-acc "" voxterm--stream-sent nil
         voxterm--stream-start nil voxterm--stream-here 'unset))
