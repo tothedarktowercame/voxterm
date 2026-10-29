@@ -55,5 +55,20 @@
       (voxterm--stream-end-advice))))
 (message "multi-line tool: %S" said4)
 (unless (equal said4 '("Chunk 3 returned after 19 seconds. More detail.")) (kill-emacs 1))
+;; bad case (2026-10-29, claude-16 again): stray prose between tools, then the
+;; reply.  The fallback must speak the reply, not the strays.
+(defvar said5 nil)
+(cl-letf (((symbol-function 'voxterm--post-say) (lambda (text &rest _) (push text said5))))
+  (with-temp-buffer
+    (let ((voxterm-speak-stream t) (voxterm-speak-only-buffer nil) (voxterm-gist-only t))
+      (voxterm--stream-advice "\n[Bash] cd /x; W=w.py\n$W 17830 not-fixed\n")
+      (voxterm--stream-advice "Server rate-limited; proceed with those I have.")
+      (voxterm--stream-advice "\n[Agent] You are fork B.\n")
+      (voxterm--stream-advice "Fork A: backfill ERT tests for bugs 808 3824 4792.")
+      (voxterm--stream-advice "\n[Bash] cd /y\n")
+      (voxterm--stream-advice "㊣ (\"don't count yet\") Agreed, and done.\n\nMore.")
+      (voxterm--stream-end-advice))))
+(message "strays: %S" said5)
+(unless (equal said5 '("㊣ (\"don't count yet\") Agreed, and done. More.")) (kill-emacs 1))
 (message "all gist-only cases ok")
 (kill-emacs 0)

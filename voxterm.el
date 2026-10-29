@@ -487,6 +487,12 @@ the target when it started.")
 
 (defvar-local voxterm--stream-acc ""
   "Text streamed so far in the current turn, until a paragraph is sent.")
+(defvar-local voxterm--stream-tail ""
+  "Prose streamed since the turn's last tool line, for gist-only mode.
+A turn with no Gist falls back to this, not to the turn's opening: an
+agent that works before it writes (claude-16, 2026-10-29) streams stray
+prose between its tools, and the opening paragraphs were those strays
+\(subagent chatter, bug-number lists) rather than its reply.")
 (defvar-local voxterm--stream-sent nil
   "Non-nil once this turn's paragraph has been queued.")
 (defvar-local voxterm--stream-start nil
@@ -616,8 +622,10 @@ prose (\"import json, os ...\", claude-16, 2026-10-29)."
           ;; between two prose blocks.  Keep one, or "...kind:" and a
           ;; following "Gist: ..." glue together and the line-anchored
           ;; match never sees the Gist (P3's Gist was lost this way).
-          (setq voxterm--stream-acc (concat voxterm--stream-acc "\n"))
-        (setq voxterm--stream-acc (concat voxterm--stream-acc text))
+          (setq voxterm--stream-acc (concat voxterm--stream-acc "\n")
+                voxterm--stream-tail "")
+        (setq voxterm--stream-acc (concat voxterm--stream-acc text)
+              voxterm--stream-tail (concat voxterm--stream-tail text))
         (voxterm--send-gist voxterm--stream-acc)))
      ((voxterm--tool-line-p text)
         ;; A tool line means the agent has stopped writing prose and started
@@ -644,13 +652,22 @@ prose (\"import json, os ...\", claude-16, 2026-10-29)."
     (if voxterm-gist-only
         ;; A Gist that is the stream's very last line, or a ㊥ paragraph
         ;; that is its last paragraph, has no closing blank line yet.
-        ;; A turn with no Gist at all falls back to its opening paragraphs
-        ;; (Joe, 2026-10-29); `voxterm--flush' still prefers a Gist.
-        (unless voxterm--stream-sent
-          (setq voxterm--stream-acc (concat voxterm--stream-acc "\n\n"))
-          (voxterm--flush t))
+        ;; A turn with no Gist at all falls back to the opening paragraphs
+        ;; of the prose after its last tool line, which is its reply
+        ;; (Joe, 2026-10-29; see `voxterm--stream-tail').
+        (unless (or voxterm--stream-sent
+                    (voxterm--send-gist (concat voxterm--stream-acc "\n\n")))
+          (let ((out (voxterm--collect-paragraphs
+                      (concat voxterm--stream-tail "\n\n") t)))
+            (when out
+              (setq voxterm--stream-sent t)
+              (voxterm--post-say
+               out (and voxterm--stream-start
+                        (round (* 1000 (float-time
+                                        (time-since voxterm--stream-start)))))
+               "paragraph"))))
       (voxterm--flush t)))
-  (setq voxterm--stream-acc "" voxterm--stream-sent nil
+  (setq voxterm--stream-acc "" voxterm--stream-tail "" voxterm--stream-sent nil
         voxterm--stream-start nil voxterm--stream-here 'unset))
 
 ;;;###autoload
