@@ -826,11 +826,38 @@ def commentate(text):
     return sanitize_for_speech(said) or said
 
 
+# The reply-proforma marks of futon3c/CLAUDE.md (2026-09-30) and their intent
+# keywords, the same key as xiang-scope-overlay--intent-marks.  piper's English
+# voices have no reading for them and skip them, so a fallback paragraph lost
+# both the mark and the cue it gives.  Each is spoken as its keyword.
+INTENT_MARKS = {
+    "㊥": "gist", "㊭": "propose", "㊣": "approve", "🈚": "disagree",
+    "㊟": "qualify", "🈖": "explain", "🈯": "clarify", "㊢": "report",
+    "㊩": "report problem", "㊬": "verify", "🈹": "retract", "🈡": "withdraw",
+    "🈳": "unresolved", "🈲": "constrain", "🈸": "ask action", "㊯": "delegate",
+    "㊝": "prioritize", "㊮": "collect", "🈕": "extend", "🈰": "continue",
+    "🈝": "defer", "🈘": "redirect", "㊫": "explore",
+}
+# A mark, the optional colon of the answering form ("㊭:"), and the optional
+# bracketed target: "㊢ (the change) text" -> "Report, the change. text".
+_MARK_RE = re.compile(r"(%s)[ \t]*:?[ \t]*(?:\(([^)\n]*)\))?[ \t]*"
+                      % "|".join(map(re.escape, INTENT_MARKS)))
+
+
+def speak_marks(text):
+    """Replace each proforma mark (and its bracketed target) with its keyword."""
+    def say(m):
+        word = INTENT_MARKS[m.group(1)].capitalize()
+        target = (m.group(2) or "").strip().strip('"\u201c\u201d')
+        return "%s, %s. " % (word, target) if target else "%s. " % word
+    return _MARK_RE.sub(say, text)
+
+
 def sanitize_for_speech(text):
     """Markdown-ish prose -> something piper can read. '' means don't speak."""
     if not text or _UNSPEAKABLE.match(text):
         return ""
-    s = text
+    s = speak_marks(text)
     s = re.sub(r"\[([^\]]+)\]\([^)]*\)", r"\1", s)      # [label](url) -> label
     s = re.sub(r"https?://\S+", " ", s)                  # bare URLs
     s = re.sub(r"`+([^`]*)`+", r"\1", s)                 # inline code fences
