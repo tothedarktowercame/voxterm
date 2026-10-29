@@ -597,14 +597,12 @@ the stream ended), so send whatever is in hand."
 Tool events arrive through the same `agent-chat-stream-text' call
 \(claude-repl.el:1044\) and carry no distinguishing face — the tool styling
 is applied afterwards as an overlay — so they can only be recognised by
-shape.  Every line is \"[Name] preview\", per
-`claude-repl--format-tool-detail'."
-  (let ((lines (delq nil (mapcar (lambda (l)
-                                   (let ((s (string-trim l)))
-                                     (unless (string-empty-p s) s)))
-                                 (split-string text "\n")))))
-    (and lines
-         (not (cl-find-if-not (lambda (l) (string-prefix-p "[" l)) lines)))))
+shape.  Each event opens with \"[Name] preview\", per
+`claude-repl--format-tool-detail'.  Only the opening line is tested: a
+multi-line command (a heredoc, a second shell line) continues on lines
+with no bracket, and requiring one on every line spoke the command as
+prose (\"import json, os ...\", claude-16, 2026-10-29)."
+  (string-match-p "\\`[ \t\n]*\\[[A-Za-z][A-Za-z0-9_:-]*\\][ \t\n]" text))
 
 (defun voxterm--stream-advice (text &rest _)
   "Accumulate streamed TEXT and speak once enough prose has arrived."

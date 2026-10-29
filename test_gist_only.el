@@ -28,7 +28,7 @@
 (message "default: %S" said2)
 (unless (equal said2 '("The cap is fixed. Recording the ruling:")) (kill-emacs 1))
 (message "%S" said)
-(unless (equal said '("Fixed. This is the line Joe must hear." "last line, no newline")) (kill-emacs 1))
+(unless (equal said '("Fixed. This is the line Joe must hear." "A turn with no gist at all." "last line, no newline")) (kill-emacs 1))
 
 ;; bad case (2026-09-27, P3 lost): narration with no trailing newline, a tool line,
 ;; then a Gist chunk with no leading newline. Skipping the tool line must not glue
@@ -43,5 +43,17 @@
       (voxterm--stream-end-advice))))
 (message "glued: %S" said3)
 (unless (equal said3 '("P3 is recorded.")) (kill-emacs 1))
+;; bad case (2026-10-29, claude-16): a no-Gist turn whose tool preview runs to
+;; several lines (a heredoc).  Only the first line carries "[Bash]"; the rest
+;; must not be spoken as the turn's opening paragraph.
+(defvar said4 nil)
+(cl-letf (((symbol-function 'voxterm--post-say) (lambda (text &rest _) (push text said4))))
+  (with-temp-buffer
+    (let ((voxterm-speak-stream t) (voxterm-speak-only-buffer nil) (voxterm-gist-only t))
+      (voxterm--stream-advice "\n[Bash] d=~/notes; python3 - <<'EOF'\nimport json,os\nd=os.path.expanduser(d)\n")
+      (voxterm--stream-advice "Chunk 3 returned after 19 seconds.\n\nMore detail.")
+      (voxterm--stream-end-advice))))
+(message "multi-line tool: %S" said4)
+(unless (equal said4 '("Chunk 3 returned after 19 seconds. More detail.")) (kill-emacs 1))
 (message "all gist-only cases ok")
 (kill-emacs 0)
