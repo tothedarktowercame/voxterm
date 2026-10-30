@@ -65,7 +65,9 @@ def processing_trace(base, record, analysis, proposals_doc, retrieved):
     analysis_path = base + ".analysis.json"
     candidates_path = base + ".candidates.json"
     reply = record.get("reply_text")
-    mission = record.get("mission_id") or record.get("mission")
+    mission = (record.get("excursion_id") or record.get("mission_id") or
+               record.get("campaign_id") or record.get("clocked_target") or
+               record.get("mission"))
     analysis_status = record.get("analysis_status")
     analysis_failure = ((record.get("analysis_dispatch") or {}).get("outcome") or {}).get("reason")
 
@@ -104,8 +106,9 @@ def processing_trace(base, record, analysis, proposals_doc, retrieved):
     if mission:
         rows.append(stage(
             "mission-scope", "mission pattern scope joined", "waiting",
-            {"mission": mission},
-            "turn names a mission; explicit :applied scope has not been joined"))
+            {"target": mission,
+             "basis": "turn clock projection"},
+            "clock association found; explicit :applied scope has not been joined"))
     else:
         rows.append(stage(
             "mission-scope", "mission pattern scope joined", "blocked",

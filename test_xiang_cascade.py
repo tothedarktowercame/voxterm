@@ -62,6 +62,13 @@ try:
     trace["mission-scope"]["state"]=="blocked"
     and "turn-to-mission" in trace["mission-scope"]["detail"]
     and "PSR is not required" in trace["mission-scope"]["detail"])
+ clocked=xc.processing_trace(os.path.join(turns,"turn-T1.json"),
+   {"excursion_id":"E-implementing-G-over-cascades"},None,None,None)
+ clocked_scope={s["id"]:s for s in clocked["stages"]}["mission-scope"]
+ ck("trace carries a clocked excursion as lossy association evidence",
+    clocked_scope["state"]=="waiting"
+    and clocked_scope["evidence"]=={"target":"E-implementing-G-over-cascades",
+                                    "basis":"turn clock projection"})
  ck("global snapshot is the reached turn's downstream frontier",
     d["trace"]["frontier"]=="drafted" and trace["global"]["state"]=="waiting")
  failed=xc.processing_trace(os.path.join(turns,"turn-T1.json"),
