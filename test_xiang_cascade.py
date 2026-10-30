@@ -4,8 +4,9 @@ fails=[]
 def ck(n,c): print(("PASS " if c else "FAIL ")+n); fails.append(n) if not c else None
 root=tempfile.mkdtemp(prefix="voxterm-cascade-")
 turns,lib,proj=(os.path.join(root,d) for d in ("turns","library","projects"))
-saved=(xc.TURN_DIR,xc.LIBRARY,xc.CLAUDE_PROJECTS)
-xc.TURN_DIR,xc.LIBRARY,xc.CLAUDE_PROJECTS=turns,lib,proj
+giraffe=os.path.join(root,"giraffe")
+saved=(xc.TURN_DIR,xc.LIBRARY,xc.CLAUDE_PROJECTS,xc.GIRAFFE_ROOT)
+xc.TURN_DIR,xc.LIBRARY,xc.CLAUDE_PROJECTS,xc.GIRAFFE_ROOT=turns,lib,proj,giraffe
 def w(path,obj):
  os.makedirs(os.path.dirname(path),exist_ok=True)
  with open(path,"w",encoding="utf-8") as f: f.write(obj if isinstance(obj,str) else json.dumps(obj,ensure_ascii=False))
@@ -69,6 +70,19 @@ try:
     clocked_scope["state"]=="waiting"
     and clocked_scope["evidence"]=={"target":"E-implementing-G-over-cascades",
                                     "basis":"turn clock projection"})
+ w(os.path.join(giraffe,"run-1","work-clusters.json"),
+   {"run_id":"run-1","by_item":{"E-implementing-G-over-cascades":"work-cluster/abc"},
+    "clusters":[{"id":"work-cluster/abc",
+                 "members":["E-implementing-G-over-cascades","M-G-over-cascades"],
+                 "basis-counts":{"declared":1}}]})
+ clustered=xc.processing_trace(os.path.join(turns,"turn-T1.json"),
+   {"excursion_id":"E-implementing-G-over-cascades"},None,None,None)
+ cluster_stage={s["id"]:s for s in clustered["stages"]}["work-cluster"]
+ ck("trace joins the clocked excursion to Giraffe's evidenced cluster",
+    cluster_stage["state"]=="reached"
+    and cluster_stage["evidence"]["members"]==
+      ["E-implementing-G-over-cascades","M-G-over-cascades"]
+    and cluster_stage["evidence"]["basis_counts"]=={"declared":1})
  ck("global snapshot is the reached turn's downstream frontier",
     d["trace"]["frontier"]=="drafted" and trace["global"]["state"]=="waiting")
  failed=xc.processing_trace(os.path.join(turns,"turn-T1.json"),
@@ -90,5 +104,5 @@ try:
    {"id":"s1","fragments":[frag("later","report",refs=["a/cited"])]}]})
  ck("attestation picks up a new analysis",xc.attestation("turn-T1")["a/cited"]["cites"]==3)
 finally:
- xc.TURN_DIR,xc.LIBRARY,xc.CLAUDE_PROJECTS=saved; shutil.rmtree(root)
+ xc.TURN_DIR,xc.LIBRARY,xc.CLAUDE_PROJECTS,xc.GIRAFFE_ROOT=saved; shutil.rmtree(root)
 print("ALL PASS" if not fails else "FAILED: %s"%fails); raise SystemExit(1 if fails else 0)

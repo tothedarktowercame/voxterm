@@ -30,6 +30,8 @@ LIBRARY = os.path.expanduser(os.environ.get(
     "VOXTERM_PATTERN_LIBRARY", "~/code/futon3/library"))
 CLAUDE_PROJECTS = os.path.expanduser(os.environ.get(
     "VOXTERM_CLAUDE_PROJECTS", "~/.claude/projects"))
+GIRAFFE_ROOT = os.path.expanduser(os.environ.get(
+    "VOXTERM_GIRAFFE_ROOT", "~/code/storage/giraffe"))
 
 RECORD_ID = re.compile(r"^turn-[A-Za-z0-9_-]{1,40}$")
 PATTERN_ID = re.compile(r"[A-Za-z0-9][\w.-]*/[\w.-]+[\w]")
@@ -52,6 +54,27 @@ def _artifact(path):
         return None
 
 
+def giraffe_work_cluster(target):
+    """Latest Giraffe run's evidenced planning cluster for TARGET, if any."""
+    projections = glob.glob(os.path.join(GIRAFFE_ROOT, "*", "work-clusters.json"))
+    if not projections:
+        return None
+    path = max(projections, key=os.path.getmtime)
+    doc = _read_json(path)
+    if not isinstance(doc, dict):
+        return None
+    cluster_id = (doc.get("by_item") or {}).get(target)
+    cluster = next((c for c in doc.get("clusters") or []
+                    if c.get("id") == cluster_id), None)
+    if not cluster:
+        return None
+    return {"run_id": doc.get("run_id"), "cluster_id": cluster_id,
+            "members": cluster.get("members") or [],
+            "basis_counts": (cluster.get("basis_counts") or
+                             cluster.get("basis-counts") or {}),
+            "source": path}
+
+
 def processing_trace(base, record, analysis, proposals_doc, retrieved):
     """How far the durable processing of one operator turn has gone.
 
@@ -68,6 +91,7 @@ def processing_trace(base, record, analysis, proposals_doc, retrieved):
     mission = (record.get("excursion_id") or record.get("mission_id") or
                record.get("campaign_id") or record.get("clocked_target") or
                record.get("mission"))
+    cluster = giraffe_work_cluster(mission) if mission else None
     analysis_status = record.get("analysis_status")
     analysis_failure = ((record.get("analysis_dispatch") or {}).get("outcome") or {}).get("reason")
 
@@ -105,11 +129,20 @@ def processing_trace(base, record, analysis, proposals_doc, retrieved):
 
     if mission:
         rows.append(stage(
+            "work-cluster", "Giraffe work cluster joined",
+            "reached" if cluster else "waiting",
+            cluster,
+            ("dependency cluster found" if cluster else
+             "clocked target has no cluster in the latest Giraffe run")))
+        rows.append(stage(
             "mission-scope", "mission pattern scope joined", "waiting",
             {"target": mission,
              "basis": "turn clock projection"},
             "clock association found; explicit :applied scope has not been joined"))
     else:
+        rows.append(stage(
+            "work-cluster", "Giraffe work cluster joined", "blocked",
+            detail="no clocked work target"))
         rows.append(stage(
             "mission-scope", "mission pattern scope joined", "blocked",
             detail="no explicit turn-to-mission link; PSR is not required"))
