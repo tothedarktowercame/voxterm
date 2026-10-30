@@ -7,6 +7,11 @@ const path = require('node:path');
 const assert = require('node:assert/strict');
 const cascade = {ok:true, id:'turn-DHzkds', turn_id:'claude-3-turn-54', analysis:'present',
   prompt_source:'transcript', unjudged_hits:5,
+  trace:{frontier:'global',stages:[
+    {id:'recorded',label:'turn recorded',state:'reached'},
+    {id:'read',label:'turn read by 象',state:'reached'},
+    {id:'mission-scope',label:'mission pattern scope joined',state:'blocked'},
+    {id:'global',label:'global candidate state updated',state:'waiting'}]},
   fragments:[
     {key:'s1-0', sentence:'s1', text:'the labels line up', intent:'qualify'},
     {key:'s1-1', sentence:'s1', text:'the stepper window is blank', intent:'report-problem'},
@@ -74,7 +79,9 @@ const cascade = {ok:true, id:'turn-DHzkds', turn_id:'claude-3-turn-54', analysis
  assert.ok(below, 'the cascade pane sits under the turn diagram');
  assert.deepEqual(cascadeRequests, ['turn-DHzkds']);
  assert.equal(await page.locator('#cascadeHead').innerText(),
-   'Patterns: 2 cited · 1 considered · 1 proposed · 1 in the prompt · 5 other hits not judged');
+   'Patterns: 2 cited · 1 considered · 1 proposed · 1 in the prompt · 5 other hits not judged\n'
+   + 'Trace: ✓ turn recorded → ✓ turn read by 象 → × mission pattern scope joined → ○ global candidate state updated\n'
+   + 'Frontier: global');
 
  // (b) one box per node, sections top to bottom in reading order
  const kinds = await page.locator('#cascadeSvg .cnode').evaluateAll(els => els.map(e => e.dataset.kind));
@@ -125,7 +132,7 @@ const cascade = {ok:true, id:'turn-DHzkds', turn_id:'claude-3-turn-54', analysis
  await page.locator('#turnPrevBtn').click();
  await page.waitForTimeout(300);
  assert.equal(cascadeRequests[cascadeRequests.length - 1], 'older');
- assert.equal(await page.locator('#cascadeHead').innerText(), 'Patterns: not read yet — none judged');
+ assert.match(await page.locator('#cascadeHead').innerText(), /^Patterns: not read yet — none judged/);
  assert.equal(await page.locator('#cascadeSvg .cnode').count(), 0);
 
  // (g) the Dispatch view hides the pane

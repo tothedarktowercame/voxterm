@@ -54,6 +54,22 @@ try:
     and "a/missing-target" not in N and "body/only" not in N and N["a/near"]["kind"]=="neighbour" and N["a/near"]["cites"]==1)
  ck("no neighbours drawn for a prompt pick","a/noticed-friend" not in N)
  ck("retrieval hits neither cited nor rejected are counted",d["unjudged_hits"]==1)
+ trace={s["id"]:s for s in d["trace"]["stages"]}
+ ck("trace witnesses the existing producer artifacts",
+    all(trace[s]["state"]=="reached" for s in ("recorded","retrieved","read","proposed"))
+    and trace["proposed"]["detail"]=="1 proposals")
+ ck("trace does not substitute PSR or citation for mission attestation",
+    trace["mission-scope"]["state"]=="blocked"
+    and "turn-to-mission" in trace["mission-scope"]["detail"]
+    and "PSR is not required" in trace["mission-scope"]["detail"])
+ ck("global snapshot is the reached turn's downstream frontier",
+    d["trace"]["frontier"]=="drafted" and trace["global"]["state"]=="waiting")
+ failed=xc.processing_trace(os.path.join(turns,"turn-T1.json"),
+   {"analysis_status":"failed","analysis_dispatch":{"outcome":{"reason":"request timed out"}}},
+   None,None,None)
+ failed_read={s["id"]:s for s in failed["stages"]}["read"]
+ ck("failed analysis is visible rather than reported as merely absent",
+    failed_read["state"]=="failed" and failed_read["detail"]=="request timed out")
  # first cite: T0 is the earliest record citing a/near
  d0=xc.cascade("turn-T0"); ck("first cite flagged on the earliest turn",{n["id"]:n for n in d0["nodes"]}["a/near"]["first"])
  ck("no transcript -> not recorded",d0["prompt_source"]=="not recorded")

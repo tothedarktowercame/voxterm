@@ -1208,6 +1208,9 @@ function renderCascade() {
        d.prompt_source === 'transcript' ? n('noticed') + ' in the prompt' : 'prompt picks ' + d.prompt_source]
       .join(' · ')
       + (d.unjudged_hits ? ' · ' + d.unjudged_hits + ' other hits not judged' : ''))
+      + (d.trace ? '\nTrace: ' + d.trace.stages.map(s =>
+          (s.state === 'reached' ? '✓ ' : s.state === 'failed' ? '! ' : s.state === 'blocked' ? '× ' : '○ ') + s.label
+        ).join(' → ') + '\nFrontier: ' + d.trace.frontier : '')
       + (focus ? '\nlit: ' + markOfFrag(focus) + ' ' + firstWords(frags[focus].text, 48) + ' (tap here to clear)' : '');
   cascadeHead.style.whiteSpace = 'pre-line';
   const W = 360, gx = 40, boxW = W - gx - 4, boxH = 28, gap = 6, headH = 14, pad = 6;

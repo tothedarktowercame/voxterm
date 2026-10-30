@@ -44,6 +44,88 @@ def _read_json(path):
         return None
 
 
+def _artifact(path):
+    """A trace witness which is safe to return to the browser."""
+    try:
+        return {"path": path, "mtime": os.path.getmtime(path)}
+    except OSError:
+        return None
+
+
+def processing_trace(base, record, analysis, proposals_doc, retrieved):
+    """How far the durable processing of one operator turn has gone.
+
+    This reports witnesses; it does not infer that a later stage happened from
+    an earlier one.  In particular a citation is not mission attestation.
+    Mission attestation needs a turn->mission link before the mission's
+    explicit pattern scope can be joined to this trace.
+    """
+    draft_path = base + ".draft.json"
+    patterns_path = base + ".patterns.json"
+    analysis_path = base + ".analysis.json"
+    candidates_path = base + ".candidates.json"
+    reply = record.get("reply_text")
+    mission = record.get("mission_id") or record.get("mission")
+    analysis_status = record.get("analysis_status")
+    analysis_failure = ((record.get("analysis_dispatch") or {}).get("outcome") or {}).get("reason")
+
+    def stage(stage_id, label, state, evidence=None, detail=None):
+        row = {"id": stage_id, "label": label, "state": state}
+        if evidence:
+            row["evidence"] = evidence
+        if detail:
+            row["detail"] = detail
+        return row
+
+    rows = [
+        stage("recorded", "turn recorded", "reached", _artifact(base)),
+        stage("drafted", "draft produced",
+              "reached" if _artifact(draft_path) else "waiting",
+              _artifact(draft_path)),
+        stage("retrieved", "patterns retrieved",
+              "reached" if _artifact(patterns_path) else "waiting",
+              _artifact(patterns_path),
+              "%d retrieval clauses" % len(retrieved) if retrieved is not None else None),
+        stage("read", "turn read by 象",
+              "reached" if analysis is not None else
+              "failed" if analysis_status == "failed" else "waiting",
+              _artifact(analysis_path),
+              analysis_failure if analysis is None and analysis_status == "failed" else None),
+        stage("proposed", "proposals recorded",
+              "reached" if proposals_doc is not None else "waiting",
+              _artifact(candidates_path),
+              "%d proposals" % len((proposals_doc or {}).get("candidates") or [])),
+        stage("replied", "agent reply attached",
+              "reached" if isinstance(reply, str) and reply.strip() else "waiting",
+              {"field": "reply_text", "reply_at": record.get("reply_at")}
+              if isinstance(reply, str) and reply.strip() else None),
+    ]
+
+    if mission:
+        rows.append(stage(
+            "mission-scope", "mission pattern scope joined", "waiting",
+            {"mission": mission},
+            "turn names a mission; explicit :applied scope has not been joined"))
+    else:
+        rows.append(stage(
+            "mission-scope", "mission pattern scope joined", "blocked",
+            detail="no explicit turn-to-mission link; PSR is not required"))
+    rows.append(stage(
+        "global", "global candidate state updated", "waiting",
+        detail="no versioned global-cascade snapshot exists"))
+    rows.append(stage(
+        "governed", "candidate disposition governed", "waiting",
+        detail="no promotion, merge, revision, or rejection record exists"))
+
+    # The frontier is the first unfinished producer stage.  Downstream stages
+    # stay visible even when an earlier optional producer (such as a reply) is
+    # absent, so the trace shows the actual system boundary rather than a
+    # fictitious linear workflow.
+    core = rows[:5]
+    frontier = next((r["id"] for r in core if r["state"] != "reached"), "global")
+    return {"stages": rows, "frontier": frontier}
+
+
 # --- library ------------------------------------------------------------
 _lib_cache = {}
 
@@ -174,8 +256,10 @@ def cascade(record_id):
     if record is None:
         return {"ok": False, "error": "no such record"}
     analysis = _read_json(base + ".analysis.json")
-    proposals = (_read_json(base + ".candidates.json") or {}).get("candidates") or []
-    retrieved = _read_json(base + ".patterns.json") or {}
+    proposals_doc = _read_json(base + ".candidates.json")
+    proposals = (proposals_doc or {}).get("candidates") or []
+    retrieved_doc = _read_json(base + ".patterns.json")
+    retrieved = retrieved_doc or {}
 
     fragments, by_sentence = [], {}
     nodes = {}
@@ -263,4 +347,6 @@ def cascade(record_id):
     return {"ok": True, "id": record_id, "turn_id": record.get("turn_id"),
             "analysis": "present" if analysis else "absent",
             "fragments": fragments, "nodes": list(nodes.values()), "edges": edges,
-            "prompt_source": source, "unjudged_hits": unjudged}
+            "prompt_source": source, "unjudged_hits": unjudged,
+            "trace": processing_trace(base, record, analysis, proposals_doc,
+                                      retrieved_doc)}
