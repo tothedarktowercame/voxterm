@@ -2508,6 +2508,9 @@ async function submitBugReport(text) {
     });
     const reply = await res.json();
     if (!reply.ok) throw new Error(reply.detail || 'capture refused');
+    // Ordinary dispatch clears the Emacs ghost by inserting into the REPL.
+    // A report deliberately bypasses insertion, so clear it explicitly.
+    preview('');
     out.textContent += (out.textContent ? '\n' : '') + '🐞 BUG REPORT: ' + text;
     setStatus('bug report captured — context collection continues in Emacs');
   } catch (err) {

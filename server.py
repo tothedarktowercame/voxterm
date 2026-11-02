@@ -1334,8 +1334,14 @@ def capture_bug_report(summary):
         return {"ok": False, "detail": "empty bug report"}
     agent = elisp_string(BUG_REPORT_AGENT) if BUG_REPORT_AGENT else "nil"
     expr = ('(progn (unless (fboundp (quote report-futon-bug-async))'
-            ' (load %s nil nil)) (report-futon-bug-async %s %s))'
-            % (elisp_string(BUG_REPORT_ELISP), elisp_string(summary), agent))
+            ' (load %s nil nil))'
+            ' (let ((win (and (fboundp (quote voxterm--target-window))'
+            '                 (voxterm--target-window))))'
+            '   (if (window-live-p win)'
+            '       (with-selected-window win (report-futon-bug-async %s %s))'
+            '     (report-futon-bug-async %s %s))))'
+            % (elisp_string(BUG_REPORT_ELISP), elisp_string(summary), agent,
+               elisp_string(summary), agent))
     try:
         result = subprocess.run(["emacsclient", "-s", EMACS_SOCKET, "-e", expr],
                                 capture_output=True, text=True, timeout=5)
