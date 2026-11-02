@@ -90,8 +90,9 @@
   }
   #pending:empty::before { content: 'buffering… say "rocket" to send'; color: var(--dim); font-style: italic; }
   #pending.flash { border-color: var(--rocket); background: #241d10; }
-  #retract { margin: 6px 0 0; padding: 8px 14px; font-size: 14px; }
-  #pending:empty + #retract { display: none; }
+  #pendingActions { display: flex; gap: 8px; margin: 6px 0 0; }
+  #pendingActions button { padding: 8px 14px; font-size: 14px; }
+  #pending:empty + #pendingActions { display: none; }
   #phantoms { margin-top: 8px; font-size: 12.5px; color: var(--dim); }
   #phantoms button { margin: 2px 4px 2px 0; padding: 2px 8px; font-size: 12px; }
 
@@ -251,7 +252,10 @@
       <div id="meter"></div><div id="thresh"></div><div id="meterLabel">idle</div>
     </div>
     <div id="pending"></div>
-    <button id="retract" title="Drop the buffered text without sending; its short chunks are blocked from now on">✕ retract buffer</button>
+    <div id="pendingActions">
+      <button id="sendPending" title="Send the buffered text without requiring another voice transcription">🚀 send now</button>
+      <button id="retract" title="Drop the buffered text without sending; its short chunks are blocked from now on">✕ retract buffer</button>
+    </div>
     <details id="phantoms"><summary>blocked phrases (<span id="phantomCount">0</span>)</summary>
       <div id="phantomList"></div></details>
   </div>
@@ -375,6 +379,28 @@ const agents = $('#agents'), newKinds = $('#newKinds');
 
 let pendingRaw = ''; // Keep literal escapes and split phrases intact until dispatch.
 let pendingChunks = []; // the separate transcripts pendingRaw was joined from
+const PENDING_STORAGE_KEY = 'voxterm.pending.v1';
+
+function storePendingDraft() {
+  try {
+    if (pendingRaw) localStorage.setItem(PENDING_STORAGE_KEY, JSON.stringify({
+      text: pendingRaw, chunks: pendingChunks, at: Date.now()
+    }));
+    else localStorage.removeItem(PENDING_STORAGE_KEY);
+  } catch (_) { /* private browsing/storage denial must not break dictation */ }
+}
+
+function restorePendingDraft() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(PENDING_STORAGE_KEY) || 'null');
+    if (saved && typeof saved.text === 'string' && saved.text.trim()) {
+      setPending(saved.text, true, Array.isArray(saved.chunks) ? saved.chunks : [saved.text]);
+      setStatus('restored unsent dictation — say "rocket" or tap “send now”');
+      return;
+    }
+  } catch (_) { localStorage.removeItem(PENDING_STORAGE_KEY); }
+  preview('');
+}
 
 const RATE = 16000;
 const FRAME = 1024;                 // 64 ms at 16 kHz
@@ -416,6 +442,27 @@ const TRIGGER = /\b(?:rocket+s?|rock\s?it|rock\s?et|rocked|rockit)\b/gi;
 // mention is the tradeoff: narrow TRIGGER, not this, if a phrase misfires.
 // TRAILING_TRIGGER still strips repeated keywords off the tail of the payload.
 const TRAILING_TRIGGER = /(?:[\s.,!?;:]*\b(?:rocket+s?|rock\s?it|rock\s?et|rocked|rockit)\b[\s.,!?;:]*)+$/i;
+
+async function fetchRecovering(url, options, attempts = 3) {
+  let lastError;
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 45000);
+    try {
+      const response = await fetch(url, Object.assign({}, options, {signal: controller.signal}));
+      if (!response.ok && response.status >= 500) throw new Error('HTTP ' + response.status);
+      return response;
+    } catch (error) {
+      lastError = error;
+      if (attempt === attempts) break;
+      setStatus('connection interrupted — retrying (' + attempt + '/' + attempts + ')…');
+      await new Promise(resolve => setTimeout(resolve, 500 * Math.pow(2, attempt - 1)));
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+  throw lastError;
+}
 
 function findTrigger(text) {
   let m, last = null;
@@ -2281,7 +2328,7 @@ async function send(samples, fromVad) {
   else meterLabel.textContent = 'transcribing ' + secs.toFixed(1) + 's…';
   try {
     const qs = new URLSearchParams({ model: $('#model').value, ac: $('#ac').value, greedy: $('#greedy').value });
-    const res = await fetch('transcribe?' + qs, {
+    const res = await fetchRecovering('transcribe?' + qs, {
       method: 'POST', headers: { 'Content-Type': 'audio/wav' }, body: encodeWav(samples, RATE)
     });
     const r = await res.json();
@@ -2347,9 +2394,15 @@ function handle(r, roundTrip, fromVad) {
   if (!/\w/.test(after)) after = '';   // bare punctuation after the keyword is not a next buffer
   const payload = joinChunk(pendingRaw, before);
   addEntry(processTranslation(text).text, meta + ' · <b>ROCKET</b>', 'fired');
-  setPending(after, !payload);   // voxterm-insert clears the overlay; re-show any carry-over
-  if (payload) dispatch(payload); else setStatus('rocket with empty buffer — nothing sent');
-  if (payload && after) preview(after);
+  if (payload && !after) {
+    // Keep the draft visible and durable until /route acknowledges it. This
+    // is the same rule as an offline editor: an attempted send is not a save.
+    dispatch(payload, true);
+  } else {
+    setPending(after, !payload); // voxterm-insert clears the overlay; re-show carry-over
+    if (payload) dispatch(payload); else setStatus('rocket with empty buffer — nothing sent');
+    if (payload && after) preview(after);
+  }
 }
 
 // Every decision to drop audio happens here on the phone, so a page that has stopped
@@ -2376,6 +2429,7 @@ function setPending(text, mirror = true, chunks = null) {
   pendingChunks = chunks || (text ? [text] : []);
   pending.textContent = processTranslation(text).text;
   pendingAt = performance.now();
+  storePendingDraft();
   if (mirror) preview(text);
 }
 
@@ -2463,11 +2517,11 @@ $('#processForm').addEventListener('submit', event => {
   if (text) dispatch(text);
 });
 
-async function dispatch(text) {
+async function dispatch(text, clearMatchingPending = false) {
   const translated = processTranslation(text);
   const cues = translated.cues || (translated.cue ? [translated.cue] : []);
   if (cues.some(cue => cue.id === 'bug-report')) {
-    submitBugReport(translated.text);
+    submitBugReport(translated.text, clearMatchingPending ? text : null);
     return;
   }
   text = processMessage(text);
@@ -2482,7 +2536,10 @@ async function dispatch(text) {
 
   const sink = $('#sink').value;
   const words = text.split(/\s+/).length;
-  if (sink === 'none') { setStatus('dispatched ' + words + ' words (not routed)'); return; }
+  if (sink === 'none') {
+    if (clearMatchingPending && pendingRaw === text) setPending('');
+    setStatus('dispatched ' + words + ' words (not routed)'); return;
+  }
 
   setStatus('routing ' + words + ' words to ' + sink + '…');
   try {
@@ -2491,7 +2548,10 @@ async function dispatch(text) {
       body: JSON.stringify({ text: text, sink: sink, submit: $('#submit').checked })
     });
     const r = await res.json();
-    if (r.ok) setStatus('sent ' + words + ' words → ' + (r.detail || sink));
+    if (r.ok) {
+      if (clearMatchingPending && pendingRaw === text) setPending('');
+      setStatus('sent ' + words + ' words → ' + (r.detail || sink));
+    }
     else { setStatus('route failed: ' + r.detail); addEntry('route failed: ' + r.detail, '', 'bad'); }
   } catch (err) {
     setStatus('route failed: ' + err.message);
@@ -2499,7 +2559,7 @@ async function dispatch(text) {
   }
 }
 
-async function submitBugReport(text) {
+async function submitBugReport(text, pendingSource = null) {
   setStatus('capturing bug report and Emacs context…');
   try {
     const res = await fetch('bug-report', {
@@ -2511,6 +2571,7 @@ async function submitBugReport(text) {
     // Ordinary dispatch clears the Emacs ghost by inserting into the REPL.
     // A report deliberately bypasses insertion, so clear it explicitly.
     preview('');
+    if (pendingSource && pendingRaw === pendingSource) setPending('');
     out.textContent += (out.textContent ? '\n' : '') + '🐞 BUG REPORT: ' + text;
     setStatus('bug report captured — context collection continues in Emacs');
   } catch (err) {
@@ -2635,6 +2696,13 @@ $('#retract').addEventListener('click', () => {
   addEntry(t, 'retracted by tap' + (learned.length ? ' · now blocking: ' + learned.join(' / ') : ''), '');
   setStatus('buffer retracted — nothing sent' + (learned.length ? ', ' + learned.length + ' phrase(s) blocked' : ''));
 });
+$('#sendPending').addEventListener('click', () => {
+  const text = pendingRaw;
+  if (!text) return;
+  // Keep a durable copy until routing acknowledges success. `dispatch` clears
+  // it only after the server says the destination accepted the turn.
+  dispatch(text, true);
+});
 renderPhantoms();
 $('#clear').addEventListener('click', () => { out.textContent = ''; setPending(''); log.innerHTML = ''; setStatus('cleared'); });
 
@@ -2643,7 +2711,7 @@ $('#clear').addEventListener('click', () => { out.textContent = ''; setPending('
 // stayed at point in the REPL indefinitely -- and since both its ends advance with the
 // stream it drifted to the bottom, reading as if it belonged to the current turn
 // (2026-08-29). Clear it when this page starts and when it goes away.
-preview('');
+restorePendingDraft();
 addEventListener('pagehide', () => {
   if ($('#sink').value !== 'emacs') return;
   // sendBeacon, not fetch: an unloading page is not guaranteed to finish a fetch.
