@@ -29,4 +29,7 @@ assert.equal((message(multi).match(/pattern-card — request/g) || []).length, 1
 assert.equal(translate('Please say literal pattern card, then examine pattern.').text,
  'Please say pattern card, then 🔎 REVIEW PATTERN.');
 assert.equal(translate('♪♪ Clock in').text, '♪♪ 🕒 CLOCK IN');
+assert.equal(translate('Bug report the warning repeats').text,
+ '🐞 BUG REPORT the warning repeats');
+assert.equal(translate('Literal bug report').cue, null);
 assert.deepEqual(translate(multi.text), multi);

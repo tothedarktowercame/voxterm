@@ -34,8 +34,9 @@ app-like launcher. The server stays bound to loopback, so nothing is exposed.
 
 Hold the big button to talk, or hold **space** (works with a physical keyboard in DeX).
 
-Hold **🐞 BUG REPORT** and describe a bug, surprise, inefficiency, or feature
-request.  Voxterm sends that transcript to Emacs's existing
+Say **“bug report”** in ordinary push-to-talk or continuous dictation to capture
+a bug, surprise, inefficiency, or feature request. Voxterm shows this alongside
+the other spoken process cues as **🐞 BUG REPORT** and sends that transcript to Emacs's existing
 `report-futon-bug-async` pipeline, which immediately saves the active buffer,
 `*Messages*`, and backtrace context, then gathers health, journals, and repo
 versions in the background. Reports land in `~/notes/futon-bugs/`. Set
@@ -281,6 +282,7 @@ meaning is attached at dispatch. Say these phrases anywhere in the message:
 | Clock in | 🕒 CLOCK IN | Establish task entry with a pattern, intended transition and witness |
 | Clock out | 🏁 CLOCK OUT | Record departure, actual outcome and unresolved work |
 | Pattern card | 🎒 PATTERN CARD | Identify the task's pattern/version and clause |
+| Bug report | 🐞 BUG REPORT | Capture a surprise or request with current diagnostic context |
 | Record refusal | ⛔ RECORD REFUSAL | Capture the tension, evidence and reopening condition |
 | Review pattern / examine pattern | 🔎 REVIEW PATTERN | Review observed use and propose maintenance |
 

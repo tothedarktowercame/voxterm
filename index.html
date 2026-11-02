@@ -124,10 +124,6 @@
     border-radius: 9px; padding: 10px; font-size: 13px; font-family: inherit; cursor: pointer;
   }
   .bar button:active { background: #222736; }
-  #bugReport { width: 100%; margin: 0 0 10px; padding: 13px; border-radius: 12px;
-    border: 1px solid #a6545d; background: #29171b; color: #ffb8bf;
-    font: 700 14px ui-monospace, Menlo, monospace; touch-action: none; }
-  #bugReport.live { background: #7b2631; color: white; }
 
   h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .08em; color: var(--dim);
        margin: 0 0 8px; font-weight: 600; }
@@ -265,8 +261,6 @@
     <div class="cue-list" id="processMnemonicList"></div>
   </aside>
 
-  <button id="bugReport" type="button" title="Hold and describe a bug, surprise, inefficiency, or feature request">🐞 BUG REPORT — hold to speak</button>
-
   <button id="talk">
     <span id="talkLabel">Hold to talk</span>
     <small id="talkHint">or hold the space bar</small>
@@ -373,7 +367,6 @@
 <script>
 const $ = s => document.querySelector(s);
 const talk = $('#talk'), tLabel = $('#talkLabel'), tHint = $('#talkHint');
-const bugReport = $('#bugReport');
 const rocket = $('#rocket'), rLabel = $('#rocketLabel'), listen = $('#listen');
 const meter = $('#meter'), meterWrap = $('#meterWrap'), threshEl = $('#thresh'), meterLabel = $('#meterLabel');
 const pending = $('#pending'), statusEl = $('#status'), out = $('#out'), log = $('#log');
@@ -382,7 +375,6 @@ const agents = $('#agents'), newKinds = $('#newKinds');
 
 let pendingRaw = ''; // Keep literal escapes and split phrases intact until dispatch.
 let pendingChunks = []; // the separate transcripts pendingRaw was joined from
-let bugReportCapture = false;
 
 const RATE = 16000;
 const FRAME = 1024;                 // 64 ms at 16 kHz
@@ -2322,9 +2314,9 @@ function handle(r, roundTrip, fromVad) {
       setStatus('nothing heard — not sent');
       return;
     }
-    addEntry(processTranslation(text).text, meta, bugReportCapture ? 'fired' : '');
+    addEntry(processTranslation(text).text, meta, '');
     // Push-to-talk routes each utterance straight through; there is no buffer to hold.
-    if (bugReportCapture) submitBugReport(text); else dispatch(text);
+    dispatch(text);
     return;
   }
 
@@ -2472,6 +2464,12 @@ $('#processForm').addEventListener('submit', event => {
 });
 
 async function dispatch(text) {
+  const translated = processTranslation(text);
+  const cues = translated.cues || (translated.cue ? [translated.cue] : []);
+  if (cues.some(cue => cue.id === 'bug-report')) {
+    submitBugReport(translated.text);
+    return;
+  }
   text = processMessage(text);
   out.textContent += (out.textContent ? '\n' : '') + text;
   pending.classList.add('flash');
@@ -2502,9 +2500,6 @@ async function dispatch(text) {
 }
 
 async function submitBugReport(text) {
-  bugReportCapture = false;
-  bugReport.classList.remove('live');
-  bugReport.textContent = '🐞 BUG REPORT — hold to speak';
   setStatus('capturing bug report and Emacs context…');
   try {
     const res = await fetch('bug-report', {
@@ -2573,15 +2568,12 @@ document.addEventListener('visibilitychange', async () => {
 
 // --- push to talk (disabled while always-listening) ---
 async function startPtt() {
-  if (mode !== 'ptt' || busy || pttRec) {
-    if (bugReportCapture) resetBugReportCapture();
-    return;
-  }
+  if (mode !== 'ptt' || busy || pttRec) return;
   // Record the press before awaiting microphone setup. On first use the permission
   // prompt can outlive the press; without this latch, its eventual resolution starts
   // a recording after pointerup has already been lost.
   pttRequested = true;
-  if (!(await initAudio())) { pttRequested = false; resetBugReportCapture(); return; }
+  if (!(await initAudio())) { pttRequested = false; return; }
   if (!pttRequested || mode !== 'ptt' || busy) return;
   if (ctx.state === 'suspended') await ctx.resume();
   if (!pttRequested || mode !== 'ptt' || busy) return;
@@ -2602,7 +2594,7 @@ async function stopPtt() {
   tLabel.textContent = 'Hold to talk'; tHint.textContent = 'or hold the space bar';
   if (secs < 0.25) {
     setStatus('too short (' + secs.toFixed(2) + 's) — ignored');
-    resetBugReportCapture(); return;
+    return;
   }
   tHint.textContent = secs.toFixed(1) + 's of audio';
   await send(samples, false);
@@ -2623,25 +2615,6 @@ document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'hidden' && (pttRequested || pttRec)) stopPtt();
 });
 talk.addEventListener('contextmenu', e => e.preventDefault());
-bugReport.addEventListener('pointerdown', e => {
-  e.preventDefault();
-  bugReportCapture = true;
-  bugReport.classList.add('live');
-  bugReport.textContent = '🐞 Listening — release to report';
-  try { bugReport.setPointerCapture(e.pointerId); } catch (_) {}
-  startPtt();
-});
-bugReport.addEventListener('pointerup', e => { e.preventDefault(); stopPtt(); });
-bugReport.addEventListener('pointercancel', () => {
-  resetBugReportCapture(); stopPtt();
-});
-bugReport.addEventListener('contextmenu', e => e.preventDefault());
-
-function resetBugReportCapture() {
-  bugReportCapture = false;
-  bugReport.classList.remove('live');
-  bugReport.textContent = '🐞 BUG REPORT — hold to speak';
-}
 addEventListener('keydown', e => {
   if (e.code === 'Space' && !e.repeat && mode === 'ptt' && !e.target.closest('input, textarea, select, button, [contenteditable]')) { e.preventDefault(); startPtt(); }
 });

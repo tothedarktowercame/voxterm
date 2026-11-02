@@ -9,6 +9,8 @@
      meaning: 'Request task departure. Record the actual outcome, evidence, witness verdict, pattern clause used and unresolved work; report the clock receipt. Departure does not assert success or closure.'},
     {id: 'pattern-card', phrase: 'pattern card', symbol: '🎒',
      meaning: 'Request a pattern card for this task. Name the pattern and version, relevant clause and intended use; use existing backpack/PSR facilities where available. Carriage alone is not evidence of use.'},
+    {id: 'bug-report', phrase: 'bug report', symbol: '🐞',
+     meaning: 'Capture this surprise, defect, inefficiency or feature request with current Emacs and service context. Route it through the Futon bug-report pipeline rather than treating it as an ordinary agent instruction.'},
     {id: 'record-refusal', phrase: 'record refusal', symbol: '⛔',
      meaning: 'Request capture of a refusal. Record the attempted action, noticed tension, observation or detector receipt, withheld action and reopening condition; link an existing pattern or candidate. A detector error is not automatically a domain breach.'},
     {id: 'review-pattern', phrase: 'review pattern', aliases: ['examine pattern'], symbol: '🔎',
