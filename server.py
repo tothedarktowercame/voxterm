@@ -672,6 +672,35 @@ MAX_SAY_QUEUE = 8
 # Speech older than this is dropped at dequeue: the page may have been away for
 # hours while Emacs kept enqueueing, and a backlog read out in a burst is noise.
 SAY_TTL_S = float(os.environ.get("VOXTERM_SAY_TTL_S", "90"))
+# A poll gap longer than this means no page was listening. That time does not
+# count against SAY_TTL_S: Joe dictated, switched to the terminal to read, and
+# the Gist expired 90 s later with nobody polling (2026-11-01, 323 s gap).
+SAY_POLL_GAP_S = float(os.environ.get("VOXTERM_SAY_POLL_GAP_S", "5"))
+_say_owner = None      # id of the page that last polled while visible
+_say_last_poll = None  # when a page last polled for speech it could take
+
+
+def take_say(page=None, hidden=False, now=None):
+    """Next queued item for this page, or None, and the depth left.
+
+    Each item goes to one page. A visible page takes ownership; a hidden page
+    may drain only if it is the owner, so a stale tab cannot take speech and
+    play it where nobody is listening (2026-10-28), while the page Joe was
+    just using keeps speaking when he switches away."""
+    global _say_owner, _say_last_poll
+    now = time.time() if now is None else now
+    with _say_lock:
+        if hidden and _say_owner not in (None, page):
+            return None, len(_say_queue)
+        _say_owner = page
+        if _say_last_poll is not None and now - _say_last_poll > SAY_POLL_GAP_S:
+            away = now - _say_last_poll
+            for i in _say_queue:
+                i["ts"] += away
+        _say_last_poll = now
+        _say_queue[:] = [i for i in _say_queue if now - i["ts"] <= SAY_TTL_S]
+        item = _say_queue.pop(0) if _say_queue else None
+        return item, len(_say_queue)
 
 # Paragraphs that open with one of these are skipped: unspeakable, and the
 # buffer already shows them.
@@ -3202,10 +3231,10 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         path = urlparse(self.path).path
         if path in ("/", "/index.html"):
-            # A (re)loaded page wants live speech, not whatever accumulated
-            # while nobody was listening.
+            # A (re)loaded page wants live speech, not a backlog, but Android
+            # reloads a discarded tab on return, so keep the newest reply.
             with _say_lock:
-                _say_queue.clear()
+                del _say_queue[:-1]
             try:
                 with open(os.path.join(HERE, "index.html"), "rb") as f:
                     # Always revalidate: a phone PWA that keeps a stale page
@@ -3222,11 +3251,9 @@ class Handler(BaseHTTPRequestHandler):
             except OSError as e:
                 self._send(500, str(e), "text/plain")
         elif path == "/say/next":
-            with _say_lock:
-                now = time.time()
-                _say_queue[:] = [i for i in _say_queue if now - i["ts"] <= SAY_TTL_S]
-                item = _say_queue.pop(0) if _say_queue else None
-                depth = len(_say_queue)
+            query = parse_qs(urlparse(self.path).query)
+            item, depth = take_say(query.get("page", [None])[0],
+                                   query.get("hidden", ["0"])[0] == "1")
             if item:
                 item = dict(item); item.pop("ts", None)
             body = {"text": None, "voice": None, "speaker": None,

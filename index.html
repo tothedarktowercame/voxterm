@@ -565,15 +565,18 @@ async function instantReply(text) {
 
 // Drain the agent-reply queue. Emacs enqueues via POST /say; nothing here blocks
 // the REPL, so a failed poll is simply a quiet turn.
+const sayPage = Math.random().toString(36).slice(2);
 async function drainSay() {
   if (!$('#speakagent').checked || speaking || speakBusy || !ctx) return;
-  // Each queued reply goes to whichever page asks first. With two pages open
-  // (2026-10-28: one visible with the mic live, one hidden and silent, both
-  // polling) a hidden page could take the Gist and play it where nobody is
-  // listening. Only a page the user can see drains the queue.
-  if (document.visibilityState !== 'visible') return;
+  // Each queued reply goes to one page. With two pages open (2026-10-28: one
+  // visible, one hidden and silent) a hidden page could take the Gist and play
+  // it where nobody is listening, so the server lets a hidden page drain only if
+  // it was the last one visible. Switching to the terminal must not silence
+  // replies (2026-11-01). If audio cannot play, leave the item queued for return.
+  const hidden = document.visibilityState !== 'visible';
+  if (hidden && ctx.state !== 'running') return;
   try {
-    const res = await fetch('say/next');
+    const res = await fetch('say/next?page=' + sayPage + '&hidden=' + (hidden ? 1 : 0));
     if (!res.ok) return;
     const r = await res.json();
     if (r.text) {
