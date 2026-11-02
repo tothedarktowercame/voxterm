@@ -628,6 +628,10 @@ TMUX_ENTER = os.environ.get("VOXTERM_TMUX_ENTER", "0") == "1"
 # Press RET after inserting, so dictation actually submits (e.g. claude-repl).
 EMACS_SUBMIT = os.environ.get("VOXTERM_EMACS_SUBMIT", "1") == "1"
 ELISP = os.path.join(HERE, "voxterm.el")
+BUG_REPORT_ELISP = os.path.expanduser(
+    os.environ.get("VOXTERM_BUG_REPORT_ELISP",
+                   "~/code/futon3c/emacs/report-futon-bug.el"))
+BUG_REPORT_AGENT = os.environ.get("VOXTERM_BUG_REPORT_AGENT") or None
 
 # Turn-start acknowledgement: speak the transcript back so a mishearing is
 # caught before the agent acts on it.
@@ -1321,6 +1325,24 @@ def route(text, sink=None, submit=None):
 
     detail = (p.stdout or p.stderr or "").strip().strip('"')
     return {"ok": p.returncode == 0, "sink": sink, "detail": detail[:300]}
+
+
+def capture_bug_report(summary):
+    """Durably hand SUMMARY and current UI context to Emacs for collection."""
+    summary = (summary or "").strip()
+    if not summary:
+        return {"ok": False, "detail": "empty bug report"}
+    agent = elisp_string(BUG_REPORT_AGENT) if BUG_REPORT_AGENT else "nil"
+    expr = ('(progn (unless (fboundp (quote report-futon-bug-async))'
+            ' (load %s nil nil)) (report-futon-bug-async %s %s))'
+            % (elisp_string(BUG_REPORT_ELISP), elisp_string(summary), agent))
+    try:
+        result = subprocess.run(["emacsclient", "-s", EMACS_SOCKET, "-e", expr],
+                                capture_output=True, text=True, timeout=5)
+    except Exception as exc:
+        return {"ok": False, "detail": repr(exc)}
+    detail = (result.stdout or result.stderr or "").strip()
+    return {"ok": result.returncode == 0, "detail": detail[:300]}
 
 
 def synthesize(text, voice=None, speaker=None, length_scale=None):
@@ -3600,10 +3622,23 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         parsed = urlparse(self.path)
-        if parsed.path not in ("/transcribe", "/route", "/speak", "/say",
+        if parsed.path not in ("/transcribe", "/route", "/bug-report", "/speak", "/say",
                                "/commentate", "/preview", "/target",
                                "/speech", "/agency/new"):
             self._send(404, "not found", "text/plain")
+            return
+
+        if parsed.path == "/bug-report":
+            try:
+                length = int(self.headers.get("Content-Length") or 0)
+                if length < 0 or length > 64 * 1024:
+                    raise ValueError("request body length is invalid")
+                payload = json.loads(self.rfile.read(length).decode("utf-8"))
+                self._send(200, json.dumps(capture_bug_report(payload.get("summary"))),
+                           "application/json")
+            except Exception as exc:
+                self._send(400, json.dumps({"ok": False, "detail": repr(exc)}),
+                           "application/json")
             return
 
         if parsed.path == "/agency/new":

@@ -34,6 +34,14 @@ app-like launcher. The server stays bound to loopback, so nothing is exposed.
 
 Hold the big button to talk, or hold **space** (works with a physical keyboard in DeX).
 
+Hold **🐞 BUG REPORT** and describe a bug, surprise, inefficiency, or feature
+request.  Voxterm sends that transcript to Emacs's existing
+`report-futon-bug-async` pipeline, which immediately saves the active buffer,
+`*Messages*`, and backtrace context, then gathers health, journals, and repo
+versions in the background. Reports land in `~/notes/futon-bugs/`. Set
+`VOXTERM_BUG_REPORT_AGENT` to bell completed reports automatically; otherwise
+they open in Emacs for review and routing.
+
 ## Vocabulary — getting "Claude" instead of "quad"
 
 small.en mangles domain words. whisper-cli's `--prompt` biases the decoder, and
