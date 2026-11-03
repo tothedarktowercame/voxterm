@@ -680,6 +680,9 @@ SAY_TTL_S = float(os.environ.get("VOXTERM_SAY_TTL_S", "90"))
 # count against SAY_TTL_S: Joe dictated, switched to the terminal to read, and
 # the Gist expired 90 s later with nobody polling (2026-11-01, 323 s gap).
 SAY_POLL_GAP_S = float(os.environ.get("VOXTERM_SAY_POLL_GAP_S", "5"))
+# But only this much away time is credited. Uncapped, a page closed at 19:00
+# and reopened at 21:47 read out every reply queued in between (2026-11-03).
+SAY_AWAY_MAX_S = float(os.environ.get("VOXTERM_SAY_AWAY_MAX_S", "600"))
 _say_owner = None      # id of the page that last polled while visible
 _say_last_poll = None  # when a page last polled for speech it could take
 
@@ -698,9 +701,11 @@ def take_say(page=None, hidden=False, now=None):
             return None, len(_say_queue)
         _say_owner = page
         if _say_last_poll is not None and now - _say_last_poll > SAY_POLL_GAP_S:
-            away = now - _say_last_poll
+            away = min(now - _say_last_poll, SAY_AWAY_MAX_S)
             for i in _say_queue:
                 i["ts"] += away
+            # On return, speak at most the newest reply, not the backlog.
+            del _say_queue[:-1]
         _say_last_poll = now
         _say_queue[:] = [i for i in _say_queue if now - i["ts"] <= SAY_TTL_S]
         item = _say_queue.pop(0) if _say_queue else None

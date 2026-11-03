@@ -36,4 +36,17 @@ reset(("x", 1000), ("y", 1000))
 server.take_say("a", False, 1000)  # takes x
 assert server.take_say("stale", True, 1001)[0] is None
 assert server.take_say("a", True, 1002)[0]["text"] == "y"
+# Away for hours (2026-11-03: 19:00 to 21:47): the backlog is not read out.
+reset()
+server.take_say("a", False, 1000)
+server._say_queue[:] = [{"text": t, "ts": ts} for t, ts in
+                        (("r1", 1100), ("r2", 5000), ("r3", 9000))]
+assert server.take_say("a", False, 10000)[0] is None
+
+# Away a few minutes with several replies queued: only the newest is spoken.
+reset()
+server.take_say("a", False, 1000)
+server._say_queue[:] = [{"text": "r1", "ts": 1010}, {"text": "r2", "ts": 1200}]
+item, depth = server.take_say("a", False, 1300)
+assert item["text"] == "r2" and depth == 0, (item, depth)
 print("ok")
