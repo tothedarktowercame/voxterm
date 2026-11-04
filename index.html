@@ -379,12 +379,13 @@ const agents = $('#agents'), newKinds = $('#newKinds');
 
 let pendingRaw = ''; // Keep literal escapes and split phrases intact until dispatch.
 let pendingChunks = []; // the separate transcripts pendingRaw was joined from
+let pendingOutbox = []; // submitted drafts awaiting destination acknowledgement
 const PENDING_STORAGE_KEY = 'voxterm.pending.v1';
 
 function storePendingDraft() {
   try {
-    if (pendingRaw) localStorage.setItem(PENDING_STORAGE_KEY, JSON.stringify({
-      text: pendingRaw, chunks: pendingChunks, at: Date.now()
+    if (pendingRaw || pendingOutbox.length) localStorage.setItem(PENDING_STORAGE_KEY, JSON.stringify({
+      text: pendingRaw, chunks: pendingChunks, outbox: pendingOutbox, at: Date.now()
     }));
     else localStorage.removeItem(PENDING_STORAGE_KEY);
   } catch (_) { /* private browsing/storage denial must not break dictation */ }
@@ -393,8 +394,16 @@ function storePendingDraft() {
 function restorePendingDraft() {
   try {
     const saved = JSON.parse(localStorage.getItem(PENDING_STORAGE_KEY) || 'null');
-    if (saved && typeof saved.text === 'string' && saved.text.trim()) {
-      setPending(saved.text, true, Array.isArray(saved.chunks) ? saved.chunks : [saved.text]);
+    if (saved && typeof saved.text === 'string') {
+      const outbox = Array.isArray(saved.outbox) ? saved.outbox : [];
+      const texts = outbox.map(item => item && item.text).filter(text => typeof text === 'string' && text.trim());
+      if (saved.text.trim()) texts.push(saved.text);
+      const restored = texts.reduce((whole, part) => joinChunk(whole, part), '');
+      if (!restored) { preview(''); return; }
+      const chunks = outbox.flatMap(item => Array.isArray(item && item.chunks) ? item.chunks : [item.text])
+        .concat(Array.isArray(saved.chunks) ? saved.chunks : (saved.text ? [saved.text] : []));
+      pendingOutbox = [];
+      setPending(restored, true, chunks.filter(Boolean));
       setStatus('restored unsent dictation — say "rocket" or tap “send now”');
       return;
     }
@@ -2395,9 +2404,9 @@ function handle(r, roundTrip, fromVad) {
   const payload = joinChunk(pendingRaw, before);
   addEntry(processTranslation(text).text, meta + ' · <b>ROCKET</b>', 'fired');
   if (payload && !after) {
-    // Keep the draft visible and durable until /route acknowledges it. This
-    // is the same rule as an offline editor: an attempted send is not a save.
-    dispatch(payload, true);
+    // Move the draft out of the live composition but keep it durable until
+    // /route acknowledges it: an attempted send is not a save.
+    dispatch(payload, pendingRaw);
   } else {
     setPending(after, !payload); // voxterm-insert clears the overlay; re-show carry-over
     if (payload) dispatch(payload); else setStatus('rocket with empty buffer — nothing sent');
@@ -2431,6 +2440,26 @@ function setPending(text, mirror = true, chunks = null) {
   pendingAt = performance.now();
   storePendingDraft();
   if (mirror) preview(text);
+}
+
+// Submission moves the draft into a durable outbox immediately.  New speech
+// therefore starts a new composition instead of extending text already sent.
+// A failed route restores the submitted text in front of anything dictated
+// while the request was in flight.
+function beginPendingDispatch(text) {
+  if (pendingRaw !== text) return null;
+  const item = {id: Date.now() + '-' + Math.random(), text, chunks: pendingChunks, at: Date.now()};
+  pendingOutbox.push(item);
+  setPending('', true);
+  return item;
+}
+
+function finishPendingDispatch(item, accepted) {
+  if (!item) return;
+  pendingOutbox = pendingOutbox.filter(candidate => candidate.id !== item.id);
+  if (accepted) storePendingDraft();
+  else setPending(joinChunk(item.text, pendingRaw), true,
+                  (item.chunks || [item.text]).concat(pendingChunks));
 }
 
 // Losing speech while the page is unfocused has three possible causes that look
@@ -2517,11 +2546,12 @@ $('#processForm').addEventListener('submit', event => {
   if (text) dispatch(text);
 });
 
-async function dispatch(text, clearMatchingPending = false) {
+async function dispatch(text, pendingSource = null) {
+  const pendingDispatch = pendingSource !== null ? beginPendingDispatch(pendingSource) : null;
   const translated = processTranslation(text);
   const cues = translated.cues || (translated.cue ? [translated.cue] : []);
   if (cues.some(cue => cue.id === 'bug-report')) {
-    submitBugReport(translated.text, clearMatchingPending ? text : null);
+    submitBugReport(translated.text, pendingDispatch);
     return;
   }
   text = processMessage(text);
@@ -2537,7 +2567,7 @@ async function dispatch(text, clearMatchingPending = false) {
   const sink = $('#sink').value;
   const words = text.split(/\s+/).length;
   if (sink === 'none') {
-    if (clearMatchingPending && pendingRaw === text) setPending('');
+    finishPendingDispatch(pendingDispatch, true);
     setStatus('dispatched ' + words + ' words (not routed)'); return;
   }
 
@@ -2549,17 +2579,21 @@ async function dispatch(text, clearMatchingPending = false) {
     });
     const r = await res.json();
     if (r.ok) {
-      if (clearMatchingPending && pendingRaw === text) setPending('');
+      finishPendingDispatch(pendingDispatch, true);
       setStatus('sent ' + words + ' words → ' + (r.detail || sink));
     }
-    else { setStatus('route failed: ' + r.detail); addEntry('route failed: ' + r.detail, '', 'bad'); }
+    else {
+      finishPendingDispatch(pendingDispatch, false);
+      setStatus('route failed: ' + r.detail); addEntry('route failed: ' + r.detail, '', 'bad');
+    }
   } catch (err) {
+    finishPendingDispatch(pendingDispatch, false);
     setStatus('route failed: ' + err.message);
     addEntry('route failed: ' + err.message, '', 'bad');
   }
 }
 
-async function submitBugReport(text, pendingSource = null) {
+async function submitBugReport(text, pendingDispatch = null) {
   setStatus('capturing bug report and Emacs context…');
   try {
     const res = await fetch('bug-report', {
@@ -2571,10 +2605,11 @@ async function submitBugReport(text, pendingSource = null) {
     // Ordinary dispatch clears the Emacs ghost by inserting into the REPL.
     // A report deliberately bypasses insertion, so clear it explicitly.
     preview('');
-    if (pendingSource && pendingRaw === pendingSource) setPending('');
+    finishPendingDispatch(pendingDispatch, true);
     out.textContent += (out.textContent ? '\n' : '') + '🐞 BUG REPORT: ' + text;
     setStatus('bug report captured — context collection continues in Emacs');
   } catch (err) {
+    finishPendingDispatch(pendingDispatch, false);
     addEntry('BUG REPORT failed: ' + err.message, '', 'bad');
     setStatus('bug report failed — transcript remains in Segments');
   }
@@ -2699,9 +2734,8 @@ $('#retract').addEventListener('click', () => {
 $('#sendPending').addEventListener('click', () => {
   const text = pendingRaw;
   if (!text) return;
-  // Keep a durable copy until routing acknowledges success. `dispatch` clears
-  // it only after the server says the destination accepted the turn.
-  dispatch(text, true);
+  // Keep a durable outbox copy until the destination accepts the turn.
+  dispatch(text, text);
 });
 renderPhantoms();
 $('#clear').addEventListener('click', () => { out.textContent = ''; setPending(''); log.innerHTML = ''; setStatus('cleared'); });
