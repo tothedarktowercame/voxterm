@@ -2947,6 +2947,11 @@ def apm_status():
 # that shows "unreadable" -- it is exactly the false reassurance this feature
 # exists to remove.
 USAGE_TTL_S = float(os.environ.get("VOXTERM_USAGE_TTL", "120"))
+CLAUDE_PLATFORM_LEDGER = os.path.expanduser(os.environ.get(
+    "VOXTERM_CLAUDE_PLATFORM_LEDGER",
+    "~/.local/state/futon3c/claude-platform.jsonl"))
+CLAUDE_PLATFORM_MONTHLY_USD = float(os.environ.get(
+    "VOXTERM_CLAUDE_PLATFORM_MONTHLY_USD", "200"))
 _usage_lock = threading.Lock()
 _usage_cache = {"at": 0.0, "data": None}
 
@@ -3174,6 +3179,41 @@ def _usage_kimi():
     return out
 
 
+def _usage_claude_platform():
+    """Month-to-date Platform spend from futon3c's charge receipts.
+
+    This is deliberately ledger-based rather than another vendor request: the
+    same ledger enforces the monthly ceiling at invocation time, so the number
+    Voxterm shows and the number which can stop spending have one authority.
+    """
+    if CLAUDE_PLATFORM_MONTHLY_USD <= 0:
+        return {"error": "Claude Platform monthly limit is not positive"}
+    now = time.gmtime()
+    month = "%04d-%02d" % (now.tm_year, now.tm_mon)
+    spent, receipts = 0.0, 0
+    try:
+        with open(CLAUDE_PLATFORM_LEDGER, encoding="utf-8") as h:
+            for line in h:
+                try:
+                    row = json.loads(line)
+                    if str(row.get("at", "")).startswith(month):
+                        spent += float(row.get("cost-usd", 0.0))
+                        receipts += 1
+                except (ValueError, TypeError):
+                    # The charging code likewise ignores malformed historic
+                    # rows when calculating the current month's committed sum.
+                    continue
+    except FileNotFoundError:
+        # No receipt yet is a measured zero, not an unavailable provider.
+        pass
+    used = spent / CLAUDE_PLATFORM_MONTHLY_USD * 100.0
+    return {"plan": "$%.0f credit" % CLAUDE_PLATFORM_MONTHLY_USD,
+            "monthly_spend_usd": round(spent, 4),
+            "monthly_limit_usd": CLAUDE_PLATFORM_MONTHLY_USD,
+            "monthly_receipts": receipts,
+            "monthly_used_pct": round(used, 2)}
+
+
 def _reset_epoch(v):
     """Normalise a reset time to epoch SECONDS.
 
@@ -3203,7 +3243,8 @@ def collect_usage():
             return _usage_cache["data"]
     providers = {}
     for name, fn in (("claude", _usage_claude), ("codex", _usage_codex),
-                     ("zai", _usage_zai), ("kimi", _usage_kimi)):
+                     ("zai", _usage_zai), ("kimi", _usage_kimi),
+                     ("claude_platform", _usage_claude_platform)):
         t0 = time.time()
         try:
             providers[name] = fn()

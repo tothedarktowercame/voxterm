@@ -177,17 +177,18 @@
   #backlog .item { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   #backlog .id { color: var(--fg); }
   /* --- usage strip: weekly subscription headroom, one line, always visible --- */
-  #usage { font-family: ui-monospace, Menlo, monospace; font-size: 11.5px; color: var(--dim);
+  #usage, #monthlyUsage { font-family: ui-monospace, Menlo, monospace; font-size: 11.5px; color: var(--dim);
            margin: -4px 0 10px; line-height: 1.4; overflow-x: auto; white-space: nowrap;
            cursor: pointer; user-select: none; -webkit-user-select: none; }
-  #usage .p { margin-right: 12px; }
-  #usage .n { color: var(--fg); }
+  #monthlyUsage { margin-top: -8px; }
+  #usage .p, #monthlyUsage .p { margin-right: 12px; }
+  #usage .n, #monthlyUsage .n { color: var(--fg); }
   /* Three bands, because the number only matters as "can I keep working".
      amber below 35% left, red below 15%. */
-  #usage .warn { color: var(--accent, #d48700); }
-  #usage .crit { color: #d44; font-weight: 600; }
-  #usage .err  { color: #d44; }
-  #usage .sec  { color: var(--dim); margin-top: 3px; white-space: normal; }
+  #usage .warn, #monthlyUsage .warn { color: var(--accent, #d48700); }
+  #usage .crit, #monthlyUsage .crit { color: #d44; font-weight: 600; }
+  #usage .err, #monthlyUsage .err  { color: #d44; }
+  #usage .sec, #monthlyUsage .sec  { color: var(--dim); margin-top: 3px; white-space: normal; }
   #agents:empty::before { content: "nothing invoking"; color: var(--dim); font-style: italic; font-size: 12.5px; }
   .ag { border: 1px solid var(--line); background: var(--panel); border-radius: 999px;
         min-height: 44px; padding: 8px 14px; white-space: nowrap; color: var(--dim);
@@ -241,6 +242,7 @@
   <div id="topo"></div>
   <div id="wm"></div>
   <div id="usage">usage …</div>
+  <div id="monthlyUsage">month …</div>
   <div id="backlog"></div>
   <div id="newKinds" aria-label="create agent"></div>
   <div id="status">tap the button once to grant mic access</div>
@@ -2058,12 +2060,13 @@ refreshBacklog();
 setInterval(refreshBacklog, 20000);
 
 const usageEl = $('#usage');
-let usageData = null, usageExpanded = false;
+const monthlyUsageEl = $('#monthlyUsage');
+let usageData = null, usageExpanded = false, monthlyUsageExpanded = false;
 
 // Order is fixed rather than object order so the strip never reshuffles under
 // the eye; the label is what Joe calls each subscription, not the vendor name.
-const USAGE_PROVIDERS = [['claude', 'claude'], ['codex', 'codex'], ['zai', 'zai'],
-                         ['kimi', 'kimi']];
+const USAGE_PROVIDERS = [['claude', 'claude'], ['codex', 'codex'], ['zai', 'zai']];
+const MONTHLY_PROVIDERS = [['claude_platform', 'platform'], ['kimi', 'kimi']];
 
 // The providers do not share a billing window: claude/codex/zai bill weekly,
 // kimi monthly. Read the server's lead_* (longest window this provider really
@@ -2123,8 +2126,32 @@ function renderUsage() {
     html += '<div class="sec">' + rows.join('<br>') + '</div>';
   }
   usageEl.innerHTML = html;
+
+  const month = [];
+  const monthRows = [];
+  for (const [key, label] of MONTHLY_PROVIDERS) {
+    const p = usageData.providers[key] || {};
+    if (p.monthly_used_pct == null) {
+      month.push(`<span class="p">${label} <span class="err">?</span></span>`);
+      monthRows.push(`${label}: <span class="err">${p.error || 'monthly usage unavailable'}</span>`);
+      continue;
+    }
+    const left = Math.max(0, 100 - p.monthly_used_pct);
+    const cls = left < 15 ? 'crit' : (left < 35 ? 'warn' : 'n');
+    month.push(`<span class="p">${label} <span class="${cls}">${left.toFixed(1)}%</span></span>`);
+    const bits = [`monthly ${left.toFixed(1)}% left`];
+    if (p.monthly_spend_usd != null)
+      bits.push(`$${Number(p.monthly_spend_usd).toFixed(2)} / $${Number(p.monthly_limit_usd).toFixed(0)}`);
+    if (p.monthly_receipts != null) bits.push(`${p.monthly_receipts} calls`);
+    if (p.plan) bits.push(`plan ${p.plan}`);
+    if (p.monthly_resets_at) bits.push('resets ' + new Date(p.monthly_resets_at * 1000).toLocaleString());
+    monthRows.push(`${label}: ${bits.join(' \u00b7 ')}`);
+  }
+  monthlyUsageEl.innerHTML = '<span class="strip">month ' + month.join('') + '</span>' +
+    (monthlyUsageExpanded ? '<div class="sec">' + monthRows.join('<br>') + '</div>' : '');
 }
 usageEl.addEventListener('click', () => { usageExpanded = !usageExpanded; renderUsage(); });
+monthlyUsageEl.addEventListener('click', () => { monthlyUsageExpanded = !monthlyUsageExpanded; renderUsage(); });
 function refreshUsage() {
   return fetch('usage', { cache: 'no-store' })
     .then(r => r.ok ? r.json() : { ok: false })
