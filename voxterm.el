@@ -438,10 +438,12 @@ Returns a description of where the text went."
   "Port the voxterm server listens on."
   :type 'integer :group 'voxterm)
 
-(defvar voxterm-speak-stream nil
+(defcustom voxterm-speak-stream t
   "When non-nil, send the first paragraph of each streamed reply to voxterm.
-Off by default so a session you are not listening to stays silent.
-Toggle with \\[voxterm-toggle-speaking].")
+On by default: after an Emacs restart Voxterm should retain its ordinary
+spoken-reply capability rather than silently reverting to text only.
+Toggle with \\[voxterm-toggle-speaking]."
+  :type 'boolean :group 'voxterm)
 
 (defcustom voxterm-speak-only-buffer nil
   "When a string, speak streamed replies only in the buffer of that name.
@@ -690,17 +692,30 @@ properties are dropped; the caller only wants the words."
          t)))))
 
 ;;;###autoload
+(defun voxterm--sync-speaking-advice ()
+  "Make the stream advice agree with `voxterm-speak-stream'.
+Safe to call repeatedly, including after hot reloads."
+  (if voxterm-speak-stream
+      (progn
+        (unless (advice-member-p #'voxterm--stream-advice
+                                 'agent-chat-stream-text)
+          (advice-add 'agent-chat-stream-text :before #'voxterm--stream-advice))
+        (unless (advice-member-p #'voxterm--stream-end-advice
+                                 'agent-chat-end-streaming-message)
+          (advice-add 'agent-chat-end-streaming-message :after
+                      #'voxterm--stream-end-advice)))
+    (advice-remove 'agent-chat-stream-text #'voxterm--stream-advice)
+    (advice-remove 'agent-chat-end-streaming-message
+                   #'voxterm--stream-end-advice)))
+
+;;;###autoload
 (defun voxterm-toggle-speaking ()
   "Toggle speaking the first paragraph of streamed agent replies."
   (interactive)
   (setq voxterm-speak-stream (not voxterm-speak-stream))
+  (voxterm--sync-speaking-advice)
   (if voxterm-speak-stream
-      (progn
-        (advice-add 'agent-chat-stream-text :before #'voxterm--stream-advice)
-        (advice-add 'agent-chat-end-streaming-message :after #'voxterm--stream-end-advice)
-        (message "voxterm: speaking agent replies"))
-    (advice-remove 'agent-chat-stream-text #'voxterm--stream-advice)
-    (advice-remove 'agent-chat-end-streaming-message #'voxterm--stream-end-advice)
+      (message "voxterm: speaking agent replies")
     (message "voxterm: silent")))
 
 ;;;###autoload
@@ -728,6 +743,10 @@ what the voxterm page's \"voice conversation\" toggle calls.  Returns
         :only (and (stringp voxterm-speak-only-buffer) voxterm-speak-only-buffer)
         :gist-only (and voxterm-gist-only t)
         :target (ignore-errors (voxterm-target-name))))
+
+;; Loading this file is the startup boundary: install the default-on stream
+;; hooks here, not only after an interactive toggle.
+(voxterm--sync-speaking-advice)
 
 (provide 'voxterm)
 ;;; voxterm.el ends here
