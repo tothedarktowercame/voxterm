@@ -151,6 +151,7 @@
      backlog. --- */
   #wm, #topo, #apm { font-family: ui-monospace, Menlo, monospace; font-size: 11.5px; color: var(--dim);
          margin: -4px 0 10px; line-height: 1.4; overflow-x: auto; }
+  #dormant .strip { cursor: pointer; user-select: none; -webkit-user-select: none; color: #777; }
   #wm .strip, #topo .strip, #apm .strip { cursor: pointer; user-select: none; -webkit-user-select: none; }
   #wm .n { color: var(--fg); } #wm .ok { color: var(--ok); }
   #wm .warn { color: var(--accent, #d48700); }
@@ -240,6 +241,7 @@
   <div id="procs"></div>
   <div id="apm"></div>
   <div id="topo"></div>
+  <div id="dormant"></div>
   <div id="wm"></div>
   <div id="usage">usage …</div>
   <div id="monthlyUsage">month …</div>
@@ -1660,8 +1662,35 @@ function apmActor(p) {
                   waiting: 'waiting; no active tick observed', unknown: 'activity unknown'};
   return '<span class="warn">' + esc(labels[p.actor] || 'activity unknown') + '</span>';
 }
+// A campaign that stopped and has not moved for days is history, not an
+// alarm. APM v3 (stopped ~2026-09-12) and TOPO1-3 (SIGTERM 2026-10-22) sat
+// as four red strips for weeks (Joe, 2026-11-07: "several outdated rows").
+// Such strips fold into one dim #dormant line; tap it to show them in full.
+// A loop that restarts writes a fresh heartbeat and comes straight back.
+const DORMANT_S = 3 * 86400;
+let showDormant = false;
+const dormant = { apm: [], topo: [] };
+const dormantEl = $('#dormant');
+function renderDormant() {
+  const all = dormant.apm.concat(dormant.topo);
+  if (!all.length) { dormantEl.innerHTML = ''; return; }
+  dormantEl.innerHTML = '<div class="strip">' + (showDormant ? '▾' : '▸')
+    + ' dormant: ' + all.map(x => esc(x.label) + ' '
+                              + Math.floor(x.age_s / 86400) + 'd').join(' · ') + '</div>';
+}
+dormantEl.addEventListener('click', () => {
+  showDormant = !showDormant; renderApm(); renderTopo();
+});
 function renderApm() {
   const d = apmData;
+  dormant.apm = [];
+  if (d && d.ok !== false && ['stopped', 'stalled', 'finished'].includes(d.state)
+      && (d.last_progress_s || 0) > DORMANT_S) {
+    dormant.apm = [{ label: 'APM ' + String(d.campaign || '').replace('jit-all-open-', ''),
+                     age_s: d.last_progress_s }];
+    renderDormant();
+    if (!showDormant) { apmEl.innerHTML = ''; return; }
+  } else renderDormant();
   if (!d) { apmEl.innerHTML = ''; return; }
   if (d.ok === false) {
     apmEl.innerHTML = '<div class="strip alarm">' + (apmExpanded ? '▾' : '▸')
@@ -1879,8 +1908,17 @@ function renderTopo() {
   // Older servers answer with a single flat track and no .tracks array.
   const tracks = (data.tracks && data.tracks.length) ? data.tracks : [data];
   const out = [];
-  tracks.forEach(d => renderTopoTrack(
-    d, tracks.length > 1 ? 'TOPO' + (d.track || '?') : 'TOPO', out));
+  dormant.topo = [];
+  tracks.forEach(d => {
+    const label = tracks.length > 1 ? 'TOPO' + (d.track || '?') : 'TOPO';
+    if (d.ok !== false && ['stopped', 'stalled', 'finished'].includes(d.state)
+        && (d.heartbeat_s || 0) > DORMANT_S) {
+      dormant.topo.push({ label: label, age_s: d.heartbeat_s });
+      if (!showDormant) return;
+    }
+    renderTopoTrack(d, label, out);
+  });
+  renderDormant();
   topoEl.innerHTML = out.join('\n');
 }
 topoEl.addEventListener('click', () => { topoExpanded = !topoExpanded; renderTopo(); });
