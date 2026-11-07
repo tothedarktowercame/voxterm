@@ -1668,6 +1668,10 @@ function apmActor(p) {
 // Such strips fold into one dim #dormant line; tap it to show them in full.
 // A loop that restarts writes a fresh heartbeat and comes straight back.
 const DORMANT_S = 3 * 86400;
+// Campaigns that are finished for good, not paused: never drawn, not even on
+// the dormant line (Joe, 2026-11-07: "they are done and not coming back").
+// Keyed by the strip label; add a campaign here when it is closed.
+const RETIRED = new Set(['APM v3', 'TOPO1', 'TOPO2', 'TOPO3']);
 let showDormant = false;
 const dormant = { apm: [], topo: [] };
 const dormantEl = $('#dormant');
@@ -1684,6 +1688,10 @@ dormantEl.addEventListener('click', () => {
 function renderApm() {
   const d = apmData;
   dormant.apm = [];
+  if (d && d.ok !== false
+      && RETIRED.has('APM ' + String(d.campaign || '').replace('jit-all-open-', ''))) {
+    apmEl.innerHTML = ''; renderDormant(); return;
+  }
   if (d && d.ok !== false && ['stopped', 'stalled', 'finished'].includes(d.state)
       && (d.last_progress_s || 0) > DORMANT_S) {
     dormant.apm = [{ label: 'APM ' + String(d.campaign || '').replace('jit-all-open-', ''),
@@ -1911,6 +1919,7 @@ function renderTopo() {
   dormant.topo = [];
   tracks.forEach(d => {
     const label = tracks.length > 1 ? 'TOPO' + (d.track || '?') : 'TOPO';
+    if (d.ok !== false && RETIRED.has(label)) return;
     if (d.ok !== false && ['stopped', 'stalled', 'finished'].includes(d.state)
         && (d.heartbeat_s || 0) > DORMANT_S) {
       dormant.topo.push({ label: label, age_s: d.heartbeat_s });
