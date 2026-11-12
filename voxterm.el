@@ -448,7 +448,7 @@ Returns a description of where the text went."
       (url-retrieve (format "http://127.0.0.1:%d/mic-toggle" voxterm-port)
                     (lambda (_status) (ignore-errors (kill-buffer (current-buffer))))
                     nil t t)))
-  (message "VoxTerm microphone toggled"))
+  (message "VoxTerm microphone toggle requested"))
 
 (defcustom voxterm-microphone-key "<prior>"
   "Global key used to toggle VoxTerm's browser microphone."

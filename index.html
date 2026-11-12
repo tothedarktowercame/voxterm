@@ -1772,7 +1772,8 @@ function handle(r, roundTrip, fromVad) {
     micToggleText = joinChunk(micToggleText, text);
     micToggleChunks.push(text);
     addEntry(processTranslation(text).text, meta + ' · Prior session', '');
-    setStatus(micToggleActive ? 'listening — Prior toggles off' : 'finishing transcription…');
+    setStatus(micToggleActive ? 'transcribing — Prior ends and sends'
+                              : 'ending transcription and sending…');
     return;
   }
 
@@ -2170,18 +2171,18 @@ async function toggleMicSession() {
     }
     if (ctx.state === 'suspended') await ctx.resume();
     talk.classList.add('live');
-    tLabel.textContent = 'Listening…';
-    tHint.textContent = 'press Prior again to transcribe';
-    setStatus('listening — Prior toggles off');
+    tLabel.textContent = 'Transcribing…';
+    tHint.textContent = 'press Prior to end and send';
+    setStatus('transcribing — Prior ends and sends');
     return;
   }
 
   micToggleActive = false;
   if (vad === 'speech') closeSegment();
   talk.classList.remove('live');
-  tLabel.textContent = 'Transcribing…';
-  tHint.textContent = 'finishing final segment';
-  setStatus('finishing transcription…');
+  tLabel.textContent = 'Ending transcription…';
+  tHint.textContent = 'sending final segment';
+  setStatus('ending transcription and sending…');
   await drain();
   micToggleCollecting = false;
   tLabel.textContent = 'Hold to talk';

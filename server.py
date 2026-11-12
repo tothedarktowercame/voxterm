@@ -3651,6 +3651,18 @@ class Handler(BaseHTTPRequestHandler):
             return
 
         if parsed.path == "/mic-toggle":
+            # Even though the command has no payload, Emacs sends `{}`.  The
+            # handler must consume it before returning: otherwise the bytes
+            # remain on the persistent connection and the next request is
+            # parsed as "{}POST /mic-toggle", producing a 501 on every other
+            # Prior press.
+            length = int(self.headers.get("Content-Length") or 0)
+            if length < 0 or length > 1024:
+                self._send(400, json.dumps({"ok": False,
+                                            "error": "request body is invalid"}),
+                           "application/json")
+                return
+            self.rfile.read(length)
             self._send(200, json.dumps({"ok": True, "depth": queue_mic_toggle()}),
                        "application/json")
             return
