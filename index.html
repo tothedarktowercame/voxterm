@@ -565,6 +565,10 @@ let ring = [], segFrames = [], vad = 'silence', above = 0, below = 0;
 let framesSinceClose = Infinity;
 let noiseFloor = 0.004, threshold = 0.014, lastRms = 0, calibrating = 0, calAcc = [];
 let queue = [], draining = false, wakeLock = null, speaking = false;
+let drainPromise = null;
+let micToggleActive = false, micToggleCollecting = false;
+let micToggleText = '', micToggleChunks = [];
+let micTogglePolling = false;
 let speakBusy = false;              // held from speakText entry, so overlapping polls can't stack playback
 
 // Speak arbitrary text through piper on the box and play it here. The audio is a
@@ -2348,7 +2352,8 @@ function closeSegment() {
   // A noise burst opens the gate and the hang time pads it to 1-3 s of mostly
   // silence; whisper then hallucinates on it ("Claude Codex.", "Thank you.").
   // Not sending it is cheaper and more reliable than filtering the text.
-  const minFrames = pendingRaw ? MIN_SPEECH_FRAMES_PENDING : MIN_SPEECH_FRAMES;
+  const compositionStarted = micToggleCollecting ? micToggleText : pendingRaw;
+  const minFrames = compositionStarted ? MIN_SPEECH_FRAMES_PENDING : MIN_SPEECH_FRAMES;
   if (speechFrames < minFrames) {
     dbg('drop noise-burst secs=' + secs.toFixed(1) + ' frames=' + speechFrames + ' need=' + minFrames);
     addEntry('(noise burst — ' + secs.toFixed(1) + 's, not sent)', '', ''); return;
@@ -2395,13 +2400,20 @@ function encodeWav(samples, rate) {
 
 // Segments are sent strictly in order so the buffered text stays coherent.
 async function drain() {
-  if (draining) return;
+  if (drainPromise) return drainPromise;
   draining = true;
-  while (queue.length) {
-    const samples = resample(queue.shift(), inRate, RATE);
-    await send(samples, true);
-  }
-  draining = false;
+  drainPromise = (async () => {
+    try {
+      while (queue.length) {
+        const samples = resample(queue.shift(), inRate, RATE);
+        await send(samples, true);
+      }
+    } finally {
+      draining = false;
+      drainPromise = null;
+    }
+  })();
+  return drainPromise;
 }
 
 async function send(samples, fromVad) {
@@ -2437,6 +2449,21 @@ function handle(r, roundTrip, fromVad) {
                .concat(r.looped_segments ? ['<b>' + r.looped_segments + ' looped seg' +
                                             (r.looped_segments > 1 ? 's' : '') + ' dropped</b>'] : [])
                .join(' · ');
+
+  // Prior uses the existing VAD and ordered transcription queue, but owns a
+  // separate composition.  Mixing it into pendingRaw could dispatch an older
+  // unsent always-listening draft together with this bounded utterance.
+  if (fromVad && micToggleCollecting) {
+    if (!text || JUNK.test(text) || isPhantom(text)) {
+      addEntry(text || '(nothing)', meta + ' · dropped', '');
+      return;
+    }
+    micToggleText = joinChunk(micToggleText, text);
+    micToggleChunks.push(text);
+    addEntry(processTranslation(text).text, meta + ' · Prior session', '');
+    setStatus(micToggleActive ? 'listening — Prior toggles off' : 'finishing transcription…');
+    return;
+  }
 
   if (!fromVad) {
     if (!text || JUNK.test(text) || isPhantom(text)) {
@@ -2699,7 +2726,7 @@ function addEntry(text, meta, cls) {
 }
 
 // --- mode switching ---
-async function setMode(next) {
+async function setMode(next, calibrateFirst = true) {
   if (next === 'always') {
     if (pttRequested || pttRec) await stopPtt();
     if (!(await initAudio())) return;
@@ -2707,7 +2734,8 @@ async function setMode(next) {
     mode = 'always';
     rocket.classList.add('on'); rLabel.textContent = 'Always listening — ON';
     listen.classList.add('on'); talk.classList.add('hidden');
-    calibrate();
+    if (calibrateFirst) calibrate();
+    else calibrating = 0;
     try {
       if ('wakeLock' in navigator) wakeLock = await navigator.wakeLock.request('screen');
     } catch (e) { /* not fatal — screen may sleep */ }
@@ -2796,18 +2824,58 @@ addEventListener('keyup', e => {
 });
 
 async function pollMicToggle() {
+  if (micTogglePolling) return;
+  micTogglePolling = true;
   const hidden = document.visibilityState !== 'visible';
   try {
     const res = await fetch('mic-toggle/next?page=' + sayPage + '&hidden=' + (hidden ? 1 : 0));
     if (!res.ok) return;
     const r = await res.json();
-    if (r.toggle && mode === 'ptt') {
-      if (pttRequested || pttRec) await stopPtt();
-      else await startPtt();
-    }
+    if (r.toggle) await toggleMicSession();
   } catch (_) { /* server down: leave the microphone unchanged */ }
+  finally { micTogglePolling = false; }
 }
 setInterval(pollMicToggle, 250);
+
+async function toggleMicSession() {
+  if (!micToggleActive) {
+    if (mode !== 'ptt' || pttRequested || pttRec || busy) {
+      setStatus('Prior mic unavailable while another recorder is active');
+      return;
+    }
+    micToggleText = ''; micToggleChunks = [];
+    micToggleCollecting = true; micToggleActive = true;
+    ring = []; segFrames = []; vad = 'silence'; above = 0; below = 0;
+    framesSinceClose = Infinity;
+    // Do not calibrate here: speech normally begins immediately after Prior,
+    // and calibration deliberately discards its first second of audio.
+    await setMode('always', false);
+    if (mode !== 'always') {
+      micToggleActive = false; micToggleCollecting = false;
+      setStatus('Prior mic could not start');
+      return;
+    }
+    talk.classList.add('live');
+    setStatus('listening — Prior toggles off');
+    return;
+  }
+
+  micToggleActive = false;
+  if (vad === 'speech') closeSegment();
+  await setMode('ptt');
+  setStatus('finishing transcription…');
+  await drain();
+  micToggleCollecting = false;
+  talk.classList.remove('live');
+  const text = micToggleText;
+  micToggleText = ''; micToggleChunks = [];
+  if (text) {
+    addEntry(processTranslation(text).text, 'Prior session · dispatched', 'fired');
+    await dispatch(text);
+  } else {
+    setStatus('nothing heard — not sent');
+  }
+}
 
 $('#copy').addEventListener('click', async () => {
   try { await navigator.clipboard.writeText(out.textContent); setStatus('copied'); }
