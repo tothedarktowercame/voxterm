@@ -454,7 +454,19 @@ Returns a description of where the text went."
   "Global key used to toggle VoxTerm's browser microphone."
   :type 'string :group 'voxterm)
 
-(define-key global-map (kbd voxterm-microphone-key) #'voxterm-toggle-microphone)
+(defvar voxterm-microphone-mode-map
+  (let ((map (make-sparse-keymap)))
+    (define-key map (kbd voxterm-microphone-key) #'voxterm-toggle-microphone)
+    map)
+  "Keymap for `voxterm-microphone-mode'.")
+
+(define-minor-mode voxterm-microphone-mode
+  "Make the VoxTerm microphone key available ahead of scrolling minor modes."
+  :global t
+  :group 'voxterm
+  :keymap voxterm-microphone-mode-map)
+
+(voxterm-microphone-mode 1)
 
 (defcustom voxterm-speak-stream t
   "When non-nil, send the first paragraph of each streamed reply to voxterm.
