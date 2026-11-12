@@ -2296,7 +2296,9 @@ function onFrame(buf) {
     beatFrames = 0; beatMaxRms = 0;
   }
 
-  if (mode === 'ptt') { if (pttRec) pttChunks.push(buf); return; }
+  // Pointer/space PTT keeps its original single-clip path.  A Prior session
+  // stays visibly in PTT mode but deliberately falls through to the VAD path.
+  if (mode === 'ptt' && !micToggleActive) { if (pttRec) pttChunks.push(buf); return; }
 
   // On a loudspeaker the mic hears the TTS: without this gate the listener
   // transcribes the reply and in rocket mode can dispatch it again. On headphones
@@ -2352,7 +2354,8 @@ function closeSegment() {
   // A noise burst opens the gate and the hang time pads it to 1-3 s of mostly
   // silence; whisper then hallucinates on it ("Claude Codex.", "Thank you.").
   // Not sending it is cheaper and more reliable than filtering the text.
-  const compositionStarted = micToggleCollecting ? micToggleText : pendingRaw;
+  const compositionStarted = micToggleCollecting
+    ? (micToggleText || drainPromise || queue.length) : pendingRaw;
   const minFrames = compositionStarted ? MIN_SPEECH_FRAMES_PENDING : MIN_SPEECH_FRAMES;
   if (speechFrames < minFrames) {
     dbg('drop noise-burst secs=' + secs.toFixed(1) + ' frames=' + speechFrames + ' need=' + minFrames);
@@ -2726,7 +2729,11 @@ function addEntry(text, meta, cls) {
 }
 
 // --- mode switching ---
-async function setMode(next, calibrateFirst = true) {
+async function setMode(next) {
+  if (micToggleActive) {
+    setStatus('finish the Prior mic session before changing listening mode');
+    return;
+  }
   if (next === 'always') {
     if (pttRequested || pttRec) await stopPtt();
     if (!(await initAudio())) return;
@@ -2734,8 +2741,7 @@ async function setMode(next, calibrateFirst = true) {
     mode = 'always';
     rocket.classList.add('on'); rLabel.textContent = 'Always listening — ON';
     listen.classList.add('on'); talk.classList.add('hidden');
-    if (calibrateFirst) calibrate();
-    else calibrating = 0;
+    calibrate();
     try {
       if ('wakeLock' in navigator) wakeLock = await navigator.wakeLock.request('screen');
     } catch (e) { /* not fatal — screen may sleep */ }
@@ -2769,7 +2775,7 @@ document.addEventListener('visibilitychange', async () => {
 
 // --- push to talk (disabled while always-listening) ---
 async function startPtt() {
-  if (mode !== 'ptt' || busy || pttRec) return;
+  if (mode !== 'ptt' || busy || pttRec || micToggleActive) return;
   // Record the press before awaiting microphone setup. On first use the permission
   // prompt can outlive the press; without this latch, its eventual resolution starts
   // a recording after pointerup has already been lost.
@@ -2847,26 +2853,31 @@ async function toggleMicSession() {
     micToggleCollecting = true; micToggleActive = true;
     ring = []; segFrames = []; vad = 'silence'; above = 0; below = 0;
     framesSinceClose = Infinity;
-    // Do not calibrate here: speech normally begins immediately after Prior,
-    // and calibration deliberately discards its first second of audio.
-    await setMode('always', false);
-    if (mode !== 'always') {
+    // Stay in push-to-talk mode: Prior borrows only the VAD audio path, not
+    // Always listening's UI, pending buffer, wake lock, or lifetime semantics.
+    if (!(await initAudio())) {
       micToggleActive = false; micToggleCollecting = false;
       setStatus('Prior mic could not start');
       return;
     }
+    if (ctx.state === 'suspended') await ctx.resume();
     talk.classList.add('live');
+    tLabel.textContent = 'Listening…';
+    tHint.textContent = 'press Prior again to transcribe';
     setStatus('listening — Prior toggles off');
     return;
   }
 
   micToggleActive = false;
   if (vad === 'speech') closeSegment();
-  await setMode('ptt');
+  talk.classList.remove('live');
+  tLabel.textContent = 'Transcribing…';
+  tHint.textContent = 'finishing final segment';
   setStatus('finishing transcription…');
   await drain();
   micToggleCollecting = false;
-  talk.classList.remove('live');
+  tLabel.textContent = 'Hold to talk';
+  tHint.textContent = 'or hold the space bar';
   const text = micToggleText;
   micToggleText = ''; micToggleChunks = [];
   if (text) {
