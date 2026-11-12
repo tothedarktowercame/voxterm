@@ -142,7 +142,7 @@
      twenty cards here buried the two lines that actually answer the question. */
   #agents { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 10px; }
   #procs { font-family: ui-monospace, Menlo, monospace; font-size: 11.5px; color: var(--dim);
-           margin: -4px 0 10px; line-height: 1.35; white-space: pre; overflow-x: auto; }
+           margin: 0 0 10px; line-height: 1.35; white-space: pre; overflow-x: auto; }
   #procs .who { color: var(--fg); }
   #procs .hot { color: var(--accent, #d48700); }
   #procs .idle { opacity: 0.55; }
@@ -238,14 +238,6 @@
   </nav>
   <div id="viewAgents">
   <div id="agents"></div>
-  <div id="procs"></div>
-  <div id="apm"></div>
-  <div id="topo"></div>
-  <div id="dormant"></div>
-  <div id="wm"></div>
-  <div id="usage">usage …</div>
-  <div id="monthlyUsage">month …</div>
-  <div id="backlog"></div>
   <div id="newKinds" aria-label="create agent"></div>
   <div id="status">tap the button once to grant mic access</div>
 
@@ -336,6 +328,16 @@
 
   <h2>Segments</h2>
   <div id="log"></div>
+
+  <h2 style="margin-top:18px">Agent runs and system status</h2>
+  <div id="procs"></div>
+  <div id="apm"></div>
+  <div id="topo"></div>
+  <div id="dormant"></div>
+  <div id="wm"></div>
+  <div id="usage">usage …</div>
+  <div id="monthlyUsage">month …</div>
+  <div id="backlog"></div>
   </div><!-- /viewAgents -->
   <div id="viewDiagram" hidden>
     <div id="diagramHead"></div>
