@@ -25,7 +25,6 @@ from urllib.parse import urlparse, parse_qs, quote as _urlquote
 from urllib.request import Request, urlopen
 from wm_queue_status import read_queue_status
 from wm_work_status import read_work_status
-import xiang_cascade
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 WHISPER = os.path.expanduser("~/tools/whisper/whisper-cli")
@@ -1546,15 +1545,6 @@ def _mcp_needles():
 
 def _seat_mcp_server(args):
     return any(needle in args for needle in _mcp_needles())
-
-
-def ma_card_work(entries, turn):
-    """The 馬 card body for one turn: entries whose body turn-evidence-id
-    equals TURN, latest body "at" first; None when 馬 has not read it."""
-    cards = [e.get("evidence/body", {}) for e in (entries or [])
-             if (e.get("evidence/body", {}) or {}).get("turn-evidence-id") == turn]
-    cards.sort(key=lambda b: str(b.get("at") or ""))
-    return cards[-1] if cards else None
 
 
 def agency_procs():
@@ -3572,60 +3562,6 @@ class Handler(BaseHTTPRequestHandler):
             except Exception as e:
                 self._send(200, json.dumps({"ok": False, "error": str(e),
                                             "agents": []}),
-                           "application/json")
-        elif path == "/diagram/dispatch":
-            # The cross-agent dispatch window as law-checked diagram data,
-            # forwarded server-side like the agency/* routes (no Caddy
-            # change needed for the phone page).
-            try:
-                q = parse_qs(urlparse(self.path).query)
-                hours = (q.get("hours") or ["3"])[0]
-                with urlopen("http://127.0.0.1:7070/api/alpha/diagram/dispatch?hours="
-                             + _urlquote(hours), timeout=20) as r:
-                    self._send(200, r.read(), "application/json")
-            except Exception as e:
-                self._send(502, json.dumps({"ok": False, "error": str(e)}),
-                           "application/json")
-        elif path.startswith("/xiang/cascade/"):
-            # The patterns one 象 turn touched, read from the record's sidecar
-            # files on disk -- the Diagram tab's Cascade view.
-            try:
-                d = xiang_cascade.cascade(path[len("/xiang/cascade/"):])
-                self._send(200 if d.get("ok") else 404,
-                           json.dumps(d, ensure_ascii=False), "application/json")
-            except Exception as e:
-                self._send(502, json.dumps({"ok": False, "error": str(e)}),
-                           "application/json")
-        elif path == "/xiang/turns" or path.startswith("/xiang/turns/"):
-            # 象 turn records, forwarded server-side (single operator turn and
-            # the list) like diagram/dispatch — the Turn view's data.
-            try:
-                q = urlparse(self.path).query
-                with urlopen("http://127.0.0.1:7070/api/alpha/xiang/turns"
-                             + urlparse(self.path).path[len("/xiang/turns"):]
-                             + ("?" + q if q else ""), timeout=20) as r:
-                    self._send(200, r.read(), "application/json")
-            except Exception as e:
-                self._send(502, json.dumps({"ok": False, "error": str(e)}),
-                           "application/json")
-        elif path == "/xiang/card":
-            # 馬's checked work record for one turn: the card whose
-            # turn-evidence-id matches the turn record's evidence_id, latest
-            # when several match, null when 馬 has not read the turn.
-            try:
-                q = parse_qs(urlparse(self.path).query)
-                session, turn = (q.get("session") or [""])[0], (q.get("turn") or [""])[0]
-                with urlopen("http://127.0.0.1:7070/api/alpha/evidence?session-id="
-                             + _urlquote(session) + "&tag=ma-card&limit=200", timeout=10) as r:
-                    entries = json.load(r).get("entries") or []
-                body = ma_card_work(entries, turn)
-                card = (body or {}).get("card") or {}
-                work = ((card.get("fresh") or {}).get("work"))
-                self._send(200, json.dumps({"ok": True,
-                                            "work": work if work is not None else None,
-                                            "card_at": (body or {}).get("at")}), "application/json")
-            except Exception as e:
-                self._send(502, json.dumps({"ok": False, "error": str(e)}),
                            "application/json")
         elif path == "/speech":
             self._send(200, json.dumps(speech_state()), "application/json")
