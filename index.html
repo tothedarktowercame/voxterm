@@ -2795,6 +2795,20 @@ addEventListener('keyup', e => {
   if (e.code === 'Space' && mode === 'ptt' && !e.target.closest('input, textarea, select, button, [contenteditable]')) { e.preventDefault(); stopPtt(); }
 });
 
+async function pollMicToggle() {
+  const hidden = document.visibilityState !== 'visible';
+  try {
+    const res = await fetch('mic-toggle/next?page=' + sayPage + '&hidden=' + (hidden ? 1 : 0));
+    if (!res.ok) return;
+    const r = await res.json();
+    if (r.toggle && mode === 'ptt') {
+      if (pttRequested || pttRec) await stopPtt();
+      else await startPtt();
+    }
+  } catch (_) { /* server down: leave the microphone unchanged */ }
+}
+setInterval(pollMicToggle, 250);
+
 $('#copy').addEventListener('click', async () => {
   try { await navigator.clipboard.writeText(out.textContent); setStatus('copied'); }
   catch { setStatus('clipboard blocked — select and copy manually'); }

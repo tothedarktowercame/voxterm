@@ -438,6 +438,24 @@ Returns a description of where the text went."
   "Port the voxterm server listens on."
   :type 'integer :group 'voxterm)
 
+(defun voxterm-toggle-microphone ()
+  "Toggle VoxTerm's browser microphone through the local server."
+  (interactive)
+  (ignore-errors
+    (let ((url-request-method "POST")
+          (url-request-extra-headers '(("Content-Type" . "application/json")))
+          (url-request-data "{}"))
+      (url-retrieve (format "http://127.0.0.1:%d/mic-toggle" voxterm-port)
+                    (lambda (_status) (ignore-errors (kill-buffer (current-buffer))))
+                    nil t t)))
+  (message "VoxTerm microphone toggled"))
+
+(defcustom voxterm-microphone-key "<prior>"
+  "Global key used to toggle VoxTerm's browser microphone."
+  :type 'string :group 'voxterm)
+
+(define-key global-map (kbd voxterm-microphone-key) #'voxterm-toggle-microphone)
+
 (defcustom voxterm-speak-stream t
   "When non-nil, send the first paragraph of each streamed reply to voxterm.
 On by default: after an Emacs restart Voxterm should retain its ordinary

@@ -686,6 +686,33 @@ SAY_AWAY_MAX_S = float(os.environ.get("VOXTERM_SAY_AWAY_MAX_S", "600"))
 _say_owner = None      # id of the page that last polled while visible
 _say_last_poll = None  # when a page last polled for speech it could take
 
+# Emacs cannot address the browser microphone directly. It posts one toggle
+# here; the page that most recently owned this control surface consumes it.
+_mic_lock = threading.Lock()
+_mic_toggles = 0
+_mic_owner = None
+
+
+def queue_mic_toggle():
+    """Queue one microphone toggle requested by Emacs."""
+    global _mic_toggles
+    with _mic_lock:
+        _mic_toggles += 1
+        return _mic_toggles
+
+
+def take_mic_toggle(page=None, hidden=False):
+    """Consume one toggle for the active page, never for a stale hidden tab."""
+    global _mic_toggles, _mic_owner
+    with _mic_lock:
+        if hidden and _mic_owner not in (None, page):
+            return False, _mic_toggles
+        _mic_owner = page
+        if not _mic_toggles:
+            return False, 0
+        _mic_toggles -= 1
+        return True, _mic_toggles
+
 
 def take_say(page=None, hidden=False, now=None):
     """Next queued item for this page, or None, and the depth left.
@@ -3336,6 +3363,13 @@ class Handler(BaseHTTPRequestHandler):
             if item:
                 body.update(item)
             self._send(200, json.dumps(body), "application/json")
+        elif path == "/mic-toggle/next":
+            query = parse_qs(urlparse(self.path).query)
+            toggle, depth = take_mic_toggle(
+                query.get("page", [None])[0],
+                query.get("hidden", ["0"])[0] == "1")
+            self._send(200, json.dumps({"toggle": toggle, "depth": depth}),
+                       "application/json")
         elif path == "/usage":
             # Weekly subscription headroom. Cached (USAGE_TTL_S) because the
             # codex leg spawns a process; the numbers move slowly enough that a
@@ -3676,8 +3710,13 @@ class Handler(BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
         if parsed.path not in ("/transcribe", "/route", "/bug-report", "/speak", "/say",
                                "/commentate", "/preview", "/target",
-                               "/speech", "/agency/new"):
+                               "/speech", "/agency/new", "/mic-toggle"):
             self._send(404, "not found", "text/plain")
+            return
+
+        if parsed.path == "/mic-toggle":
+            self._send(200, json.dumps({"ok": True, "depth": queue_mic_toggle()}),
+                       "application/json")
             return
 
         if parsed.path == "/bug-report":
