@@ -634,7 +634,9 @@ BUG_REPORT_AGENT = os.environ.get("VOXTERM_BUG_REPORT_AGENT") or None
 
 # Turn-start acknowledgement: speak the transcript back so a mishearing is
 # caught before the agent acts on it.
-TTS_DIR = os.path.expanduser("~/code/tts")
+# piper and its voices moved out of ~/code on 2026-11-13, when ~/code was
+# restricted to git repositories. VOXTERM_TTS_DIR overrides.
+TTS_DIR = os.path.expanduser(os.environ.get("VOXTERM_TTS_DIR", "~/storage/src/tts"))
 PIPER = os.path.join(TTS_DIR, "bin", "piper")
 VOICES_DIR = os.path.join(TTS_DIR, "voices")
 VOICE = os.environ.get("VOXTERM_VOICE", "en_GB-semaine-medium")
@@ -1393,7 +1395,11 @@ def synthesize(text, voice=None, speaker=None, length_scale=None):
     try:
         # cwd matters: piper resolves its bundled espeak-ng data relative to
         # the install tree, not to the model path.
-        cmd = [PIPER, "-m", model, "-c", model + ".json", "-f", path,
+        # Run piper through the venv's own interpreter: the script's shebang
+        # still names the directory the venv was created in, which no longer
+        # exists since the move out of ~/code.
+        cmd = [os.path.join(TTS_DIR, "bin", "python3"), PIPER,
+               "-m", model, "-c", model + ".json", "-f", path,
                "-s", str(speaker if speaker is not None else SPEAKER),
                "--length-scale",
                str(length_scale if length_scale is not None else LENGTH_SCALE)]
