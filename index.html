@@ -223,7 +223,7 @@
     <button id="rocket"><span class="em">&#128640;</span><span id="rocketLabel">Always listening — off</span></button>
     <button id="talk">
       <span id="talkLabel">Hold to talk</span>
-      <small id="talkHint">or Prior</small>
+      <small id="talkHint">or F5</small>
     </button>
   </div>
 
@@ -1771,8 +1771,8 @@ function handle(r, roundTrip, fromVad) {
     }
     micToggleText = joinChunk(micToggleText, text);
     micToggleChunks.push(text);
-    addEntry(processTranslation(text).text, meta + ' · Prior session', '');
-    setStatus(micToggleActive ? 'transcribing — Prior ends and sends'
+    addEntry(processTranslation(text).text, meta + ' · F5 session', '');
+    setStatus(micToggleActive ? 'transcribing — F5 ends and sends'
                               : 'ending transcription and sending…');
     return;
   }
@@ -2040,7 +2040,7 @@ function addEntry(text, meta, cls) {
 // --- mode switching ---
 async function setMode(next) {
   if (micToggleActive) {
-    setStatus('finish the Prior mic session before changing listening mode');
+    setStatus('finish the F5 mic session before changing listening mode');
     return;
   }
   if (next === 'always') {
@@ -2155,7 +2155,7 @@ setInterval(pollMicToggle, 250);
 async function toggleMicSession() {
   if (!micToggleActive) {
     if (mode !== 'ptt' || pttRequested || pttRec || busy) {
-      setStatus('Prior mic unavailable while another recorder is active');
+      setStatus('F5 mic unavailable while another recorder is active');
       return;
     }
     micToggleText = ''; micToggleChunks = [];
@@ -2166,14 +2166,14 @@ async function toggleMicSession() {
     // Always listening's UI, pending buffer, wake lock, or lifetime semantics.
     if (!(await initAudio())) {
       micToggleActive = false; micToggleCollecting = false;
-      setStatus('Prior mic could not start');
+      setStatus('F5 mic could not start');
       return;
     }
     if (ctx.state === 'suspended') await ctx.resume();
     talk.classList.add('live');
     tLabel.textContent = 'Transcribing…';
-    tHint.textContent = 'press Prior to end and send';
-    setStatus('transcribing — Prior ends and sends');
+    tHint.textContent = 'press F5 to end and send';
+    setStatus('transcribing — F5 ends and sends');
     return;
   }
 
@@ -2190,7 +2190,7 @@ async function toggleMicSession() {
   const text = micToggleText;
   micToggleText = ''; micToggleChunks = [];
   if (text) {
-    addEntry(processTranslation(text).text, 'Prior session · dispatched', 'fired');
+    addEntry(processTranslation(text).text, 'F5 session · dispatched', 'fired');
     await dispatch(text);
   } else {
     setStatus('nothing heard — not sent');

@@ -450,8 +450,10 @@ Returns a description of where the text went."
                     nil t t)))
   (message "VoxTerm microphone toggle requested"))
 
-(defcustom voxterm-microphone-key "<prior>"
-  "Global key used to toggle VoxTerm's browser microphone."
+(defcustom voxterm-microphone-key "<f5>"
+  "Global key used to toggle VoxTerm's browser microphone.
+F5, not <prior>, since Joe 2026-11-19: <prior>/<next> step through version
+layers in the Arxana incubator form."
   :type 'string :group 'voxterm)
 
 (defvar voxterm-microphone-mode-map
