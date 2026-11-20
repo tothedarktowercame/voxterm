@@ -25,6 +25,15 @@
       (with-current-buffer b (setq buffer-read-only nil))
       (let ((voxterm-pinned-buffer-name "*claude-repl:claude-17*"))
         (check "a pin still wins over the cursor"
-               (voxterm-target-name) "*claude-repl:claude-17*")))
+               (voxterm-target-name) "*claude-repl:claude-17*")
+        ;; bad case (2026-11-20): pinned to claude-17, already shown in one
+        ;; window; Joe looking at another buffer in another window.  Asking for
+        ;; the target must not take his window.
+        (let ((other (get-buffer-create "notes.org")))
+          (set-window-buffer (selected-window) other)
+          (voxterm-target-name)
+          (voxterm-target-pinned-p)
+          (check "the pin leaves the window Joe is looking at alone"
+                 (buffer-name (window-buffer (selected-window))) "notes.org"))))
     (message "target-window: %s" (if (zerop fails) "PASS" (format "%d FAIL" fails)))
     (kill-emacs (if (zerop fails) 0 1))))

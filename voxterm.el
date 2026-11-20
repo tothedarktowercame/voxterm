@@ -119,12 +119,21 @@ otherwise worked."
   (set-window-point win (with-current-buffer (window-buffer win) (point-max))))
 
 (defun voxterm--pinned-window ()
-  "Return a live window for the pinned buffer, or nil when no pin survives."
+  "Return a live window for the pinned buffer, or nil when no pin survives.
+
+Prefer a window that already shows the pinned buffer.  Only when none does is
+the buffer put in the window in front of the user.  This is called passively,
+by every dictation and by the server's target polls; placing the buffer in the
+focused window each time made the pin take over any window Joe looked at
+(2026-11-20: \"I don't want voxterm to have another opinion about what other
+windows I might have open, because I might actually be looking at those\").
+Tapping the chip (`voxterm-pin') is the explicit request to bring it forward."
   (when voxterm-pinned-buffer-name
     (let ((buf (get-buffer voxterm-pinned-buffer-name)))
       (if (not (buffer-live-p buf))
           (progn (setq voxterm-pinned-buffer-name nil) nil)
-        (voxterm--place-in-focus-window buf)))))
+        (or (voxterm--live-buffer-window buf)
+            (voxterm--place-in-focus-window buf))))))
 
 (defun voxterm--target-window ()
   "The window a dictation should land in: the selected window of the frame
@@ -193,7 +202,8 @@ cannot take text; see `voxterm--target-window'."
     (unless (buffer-live-p buf)
       (user-error "No live buffer named %s" name))
     (setq voxterm-pinned-buffer-name (buffer-name buf))
-    (let ((win (voxterm--pinned-window)))
+    ;; the tap is an explicit request: bring the buffer to the window in front
+    (let ((win (voxterm--place-in-focus-window buf)))
       (unless (window-live-p win)
         (setq voxterm-pinned-buffer-name nil)
         (user-error "Could not display buffer %s" name))
