@@ -1612,11 +1612,14 @@ function onFrame(buf) {
   // transcribes the reply and in rocket mode can dispatch it again. On headphones
   // there is no loop, and the gate just throws away everything said while a reply
   // plays — measured as "losing about half of what I say" (2026-08-24). Off by
-  // default; it also discards any segment in progress, so only enable it when
-  // the speaker really is audible to the mic.
+  // default; only enable it when the speaker really is audible to the mic.
+  // A segment in progress when the reply starts is closed and sent, not
+  // discarded: every frame in it was captured before playback began, so it holds
+  // Joe's words and none of the TTS. Discarding it lost whatever he had said
+  // since his last pause (Joe, 2026-11-23).
   if (speaking && $('#gatemic').checked) {
     ring.length = 0; above = 0; below = 0;
-    if (vad === 'speech') { vad = 'silence'; segFrames = []; meterWrap.classList.remove('speech'); }
+    if (vad === 'speech') { dbg('gate closes segment in progress'); closeSegment(); }
     return;
   }
 
