@@ -50,6 +50,52 @@ been planted in one, which would keep a corrupted layout alive across every
 later dictation."
   (car (seq-remove #'window-minibuffer-p (get-buffer-window-list buf nil t))))
 
+;; Focus reports over mosh are not trustworthy: a terminal can send focus-in
+;; and never the matching focus-out, so it reads `focused' forever and takes
+;; every dictation (2026-08-29, again 2026-11-25: F10/claude-16 stuck focused
+;; while Joe typed in F8/claude-14).  Record when each frame last *gained*
+;; focus and when the last keystroke happened, so a keystroke in another frame
+;; after that focus-in outranks the report.
+(defvar voxterm--focus-log (make-hash-table :test 'eq :weakness 'key)
+  "Frame -> (FOCUSED-P . TIME-IT-LAST-BECAME-FOCUSED).")
+
+(defvar voxterm--last-key-time 0
+  "`float-time' of the last command run from the keyboard.
+`last-event-frame' is the frame it came from.")
+
+(defun voxterm--note-focus ()
+  "Stamp frames whose focus state has just turned to t."
+  (dolist (f (frame-list))
+    (let ((now (eq (ignore-errors (frame-focus-state f)) t))
+          (old (gethash f voxterm--focus-log)))
+      (unless (eq now (car old))
+        (puthash f (cons now (if now (float-time) (cdr old))) voxterm--focus-log)))))
+
+(defun voxterm--note-key ()
+  (setq voxterm--last-key-time (float-time)))
+
+(defun voxterm--focus-time (f)
+  "When F last gained focus, or 0 if voxterm never saw it happen."
+  (or (cdr (gethash f voxterm--focus-log)) 0))
+
+(add-function :after after-focus-change-function #'voxterm--note-focus)
+(add-hook 'pre-command-hook #'voxterm--note-key)
+
+(defun voxterm--focus-frame ()
+  "The frame the user is at: the focused frame, unless a keystroke in another
+frame happened after that frame gained focus; then `last-event-frame'."
+  (let ((focused (car (filtered-frame-list
+                       (lambda (f) (and (voxterm--usable-frame-p f)
+                                        (eq (ignore-errors (frame-focus-state f)) t))))))
+        (typed (and (voxterm--usable-frame-p last-event-frame) last-event-frame)))
+    (or (and focused typed (not (eq focused typed))
+             (> voxterm--last-key-time (voxterm--focus-time focused))
+             typed)
+        focused
+        typed
+        (car (filtered-frame-list #'voxterm--usable-frame-p))
+        (selected-frame))))
+
 (defun voxterm--focus-window ()
   "Return the window selected by voxterm's terminal-focus heuristic.
 
@@ -65,12 +111,7 @@ in ` *Minibuf-1*', and every later dictation lands there too (2026-08-30).
 
 `minibuffer-selected-window' is the window that was selected before the prompt
 opened, which is exactly what \"the window the user is typing in\" means."
-  (let* ((frame (or (car (filtered-frame-list
-                          (lambda (f) (and (voxterm--usable-frame-p f)
-                                           (eq (ignore-errors (frame-focus-state f)) t)))))
-                    (and (voxterm--usable-frame-p last-event-frame) last-event-frame)
-                    (car (filtered-frame-list #'voxterm--usable-frame-p))
-                    (selected-frame)))
+  (let* ((frame (voxterm--focus-frame))
          (win (frame-selected-window frame)))
     (if (not (window-minibuffer-p win))
         win
